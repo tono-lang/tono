@@ -396,6 +396,25 @@ let parse_inline_traits st : Ast.trait list =
   in
   go []
 
+(* Traits written above a body item, when the cursor sits on one. A trait
+   block that no item follows (the body closes, or something that cannot
+   start an item comes next) is diagnosed here and dropped: with leading
+   traits there is nothing before them it could silently bind to, so the
+   accident the old trailing rule allowed now has a message instead. *)
+let parse_item_traits st ~(what : string) ~(starts_item : Token.kind -> bool) :
+    Ast.trait list =
+  match (P.peek st).kind with
+  | Token.At ->
+      let first = (P.peek st).span in
+      let traits = parse_leading_traits st in
+      if starts_item (P.peek st).kind then traits
+      else (
+        P.error st first
+          (Printf.sprintf "expected a %s after its traits, found %s" what
+             (Token.describe (P.peek st).kind));
+        [])
+  | _ -> []
+
 (* match ::= "match" ref "{" (pattern "=>" value)* "}"  — the selection table
    of an entry/config field, also reused as a [returns:] field value in the
    FFI ext/extern block. Patterns are literals (or "_"); a value is a field

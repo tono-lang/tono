@@ -4,100 +4,10 @@
 
 module P = Parser_state
 
-(* type ::= base "?"? *)
-let rec parse_type st : Ast.ty =
-  let base = parse_base st in
-  match (P.peek st).kind with
-  | Token.Question ->
-      let q = P.advance st in
-      Ast.TNullable (base, Span.merge (Ast.ty_span base) q.span)
-  | _ -> base
+(* ── Types ─────────────────────────────────────────────────────────────── *)
 
-and parse_base st : Ast.ty =
-  let t = P.peek st in
-  match t.kind with
-  | Token.Prim p ->
-      ignore (P.advance st);
-      Ast.TPrim (p, t.span)
-  | Token.KwMap -> parse_map st t
-  | Token.LBracket -> parse_list st t
-  | Token.Ident name -> parse_named st t name
-  | _ ->
-      P.error st t.span
-        (Printf.sprintf "expected a type, found %s" (Token.describe t.kind));
-      Ast.TError t.span
-
-(* []T : a leading '[' must be followed by ']'. *)
-and parse_list st lb =
-  ignore (P.advance st);
-  (* '[' *)
-  (match (P.peek st).kind with
-  | Token.RBracket -> ignore (P.advance st)
-  | _ -> P.error st (P.peek st).span "expected ']' to form a list type '[]T'");
-  (* The element is a [base] (no trailing '?'): a '?' after '[]T' or 'map[K]V'
-     binds to the whole preceding type, captured by the outer [parse_type]. *)
-  let elem = parse_base st in
-  Ast.TList (elem, Span.merge lb.span (Ast.ty_span elem))
-
-(* map[K]V *)
-and parse_map st kw =
-  ignore (P.advance st);
-  (* 'map' *)
-  ignore (P.expect st Token.LBracket "'[' after 'map'");
-  let k = parse_type st in
-  ignore (P.expect st Token.RBracket "']' in map type");
-  let v = parse_base st in
-  Ast.TMap (k, v, Span.merge kw.span (Ast.ty_span v))
-
-(* name, name '[' args ']', or a qualified 'qualifier.Name' (optionally applied).
-   A '.' after the first identifier marks a cross-module reference: the first
-   segment is the import qualifier and the second is the shape name. *)
-and parse_named st t name =
-  ignore (P.advance st);
-  (* name (the first identifier) *)
-  match (P.peek st).kind with
-  | Token.Dot -> (
-      ignore (P.advance st);
-      (* '.' *)
-      match (P.peek st).kind with
-      | Token.Ident tyname ->
-          let nt = P.advance st in
-          let args, finish =
-            parse_opt_generics st (Span.merge t.span nt.span)
-          in
-          Ast.TQName (name, tyname, args, finish)
-      | _ ->
-          P.error st (P.peek st).span
-            "expected a type name after the '.' module qualifier";
-          Ast.TError (Span.merge t.span (P.peek st).span))
-  | _ ->
-      let args, finish = parse_opt_generics st t.span in
-      Ast.TName (name, args, finish)
-
-(* An optional '[' type (',' type)* ']' generic application after a type head;
-   returns the argument types and the span extended to the closing bracket. *)
-and parse_opt_generics st base_span : Ast.ty list * Span.span =
-  match (P.peek st).kind with
-  | Token.LBracket ->
-      ignore (P.advance st);
-      (* '[' *)
-      let args = parse_type_list st in
-      let close = P.expect st Token.RBracket "']' to close generic arguments" in
-      let finish = match close with Some c -> c.span | None -> base_span in
-      (args, Span.merge base_span finish)
-  | _ -> ([], base_span)
-
-and parse_type_list st =
-  let first = parse_type st in
-  let rec more acc =
-    match (P.peek st).kind with
-    | Token.Comma ->
-        ignore (P.advance st);
-        let n = parse_type st in
-        more (n :: acc)
-    | _ -> List.rev acc
-  in
-  more [ first ]
+(* The type grammar lives in [Parser_type]; aliased locally. *)
+let parse_type = Parser_type.parse_type
 
 (* ── Traits ────────────────────────────────────────────────────────────── *)
 
@@ -251,208 +161,13 @@ let parse_member st ~leading : Ast.member =
     mtraits = leading @ head_traits @ trailing_traits;
   }
 
-(* generics ::= "[" name ("," name)* "]" *)
-let parse_generics st : string list =
-  if (P.peek st).kind <> Token.LBracket then []
-  else (
-    ignore (P.advance st);
-    let one () =
-      match (P.peek st).kind with
-      | Token.Ident n ->
-          ignore (P.advance st);
-          n
-      | _ ->
-          P.error st (P.peek st).span "expected a type parameter name";
-          ""
-    in
-    let first = one () in
-    let rec more acc =
-      match (P.peek st).kind with
-      | Token.Comma ->
-          ignore (P.advance st);
-          more (one () :: acc)
-      | _ -> List.rev acc
-    in
-    let ps = more [ first ] in
-    ignore (P.expect st Token.RBracket "']' to close type parameters");
-    ps)
+(* ── Sums ──────────────────────────────────────────────────────────────── *)
 
-(* variant ::= trait* name ( "(" type ")" )? trait*  — the name token is
-   already consumed and passed in, so the only caller that reaches here had
-   an identifier in hand; [leading] are the traits written above it. *)
-let parse_variant st ~leading ~name ~name_span : Ast.union_variant =
-  let payload =
-    match (P.peek st).kind with
-    | Token.LParen ->
-        ignore (P.advance st);
-        let t = parse_type st in
-        ignore (P.expect st Token.RParen "')' to close the variant payload");
-        Some t
-    | _ -> None
-  in
-  let traits = parse_inline_traits st in
-  {
-    Ast.vname = name;
-    vname_span = name_span;
-    vpayload = payload;
-    vtraits = leading @ traits;
-  }
+(* Union and enum parsing lives in [Parser_sum]; aliased locally. *)
+let parse_union = Parser_sum.parse_union
+let parse_enum = Parser_sum.parse_enum
 
-(* Traits written above a body item, when the cursor sits on one. A trait
-   block that no item follows (the body closes, or something that cannot
-   start an item comes next) is diagnosed here and dropped: with leading
-   traits there is nothing before them it could silently bind to, so the
-   accident the old trailing rule allowed now has a message instead. *)
-let parse_item_traits st ~(what : string) ~(starts_item : Token.kind -> bool) :
-    Ast.trait list =
-  match (P.peek st).kind with
-  | Token.At ->
-      let first = (P.peek st).span in
-      let traits = parse_leading_traits st in
-      if starts_item (P.peek st).kind then traits
-      else (
-        P.error st first
-          (Printf.sprintf "expected a %s after its traits, found %s" what
-             (Token.describe (P.peek st).kind));
-        [])
-  | _ -> []
-
-let parse_variants st : Ast.union_variant list =
-  let starts_item = function Token.Ident _ -> true | _ -> false in
-  let rec go acc =
-    let leading = parse_item_traits st ~what:"variant" ~starts_item in
-    match (P.peek st).kind with
-    | Token.RBrace | Token.Eof -> List.rev acc
-    | Token.Ident name ->
-        let nt = P.advance st in
-        go (parse_variant st ~leading ~name ~name_span:nt.span :: acc)
-    | Token.Comma ->
-        ignore (P.advance st);
-        go acc
-    | _ ->
-        P.error st (P.peek st).span
-          (Printf.sprintf "unexpected %s in union body"
-             (Token.describe (P.peek st).kind));
-        ignore (P.advance st);
-        go acc
-  in
-  go []
-
-(* union ::= "union" name generics? "{" variant* "}" *)
-let parse_union st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'union' *)
-  let nt = P.peek st in
-  let name =
-    match nt.kind with
-    | Token.Ident n ->
-        ignore (P.advance st);
-        n
-    | _ ->
-        P.error st nt.span "expected a union name";
-        ""
-  in
-  Parser_extern.check_not_error_name st "union" name nt.span;
-  let params = parse_generics st in
-  (* traits after the name (e.g. @discriminator) join the shape-level traits *)
-  let dtraits = dtraits @ parse_inline_traits st in
-  ignore (P.expect st Token.LBrace "'{' to open the union body");
-  let variants = parse_variants st in
-  ignore (P.expect st Token.RBrace "'}' to close the union body");
-  {
-    Ast.dname = name;
-    dname_span = nt.span;
-    pub;
-    dtraits;
-    dkind = Ast.DUnion { params; variants };
-  }
-
-(* case ::= trait* name ("=" int)? trait*  — the name token is already
-   consumed and passed in, so the only caller that reaches here had an
-   identifier in hand; [leading] are the traits written above it. *)
-let parse_enum_case st ~leading ~name ~name_span : Ast.enum_case =
-  (* A case named 'null' would be unreachable as a match pattern: the match
-     parser treats a bare 'null' token as the optional-subject absence
-     pattern regardless of the enum it matches, so a case with this name
-     could never be selected. Reject it at the declaration site instead of
-     silently reinterpreting the pattern later. *)
-  if String.equal name "null" then
-    P.error st name_span
-      "'null' is reserved for the optional-subject absence pattern in a match; \
-       an enum case cannot be named 'null'";
-  (* A payload here means the author wanted a union; diagnose and skip it. *)
-  (match (P.peek st).kind with
-  | Token.LParen ->
-      P.error st (P.peek st).span
-        "enum cases carry no payload; use a 'union' for variants with data";
-      ignore (P.advance st);
-      ignore (parse_type st);
-      ignore (P.expect st Token.RParen "')' to close the payload")
-  | _ -> ());
-  let cint =
-    match (P.peek st).kind with
-    | Token.Eq -> (
-        ignore (P.advance st);
-        match (P.peek st).kind with
-        | Token.Int n ->
-            ignore (P.advance st);
-            Some n
-        | _ ->
-            P.error st (P.peek st).span "expected an integer after '='";
-            None)
-    | _ -> None
-  in
-  let traits = parse_inline_traits st in
-  { Ast.cname = name; cname_span = name_span; cint; ctraits = leading @ traits }
-
-let parse_enum_cases st : Ast.enum_case list =
-  let starts_item = function Token.Ident _ -> true | _ -> false in
-  let rec go acc =
-    let leading = parse_item_traits st ~what:"case" ~starts_item in
-    match (P.peek st).kind with
-    | Token.RBrace | Token.Eof -> List.rev acc
-    | Token.Ident name ->
-        let nt = P.advance st in
-        go (parse_enum_case st ~leading ~name ~name_span:nt.span :: acc)
-    | Token.Comma ->
-        ignore (P.advance st);
-        go acc
-    | _ ->
-        P.error st (P.peek st).span
-          (Printf.sprintf "unexpected %s in enum body"
-             (Token.describe (P.peek st).kind));
-        ignore (P.advance st);
-        go acc
-  in
-  go []
-
-(* enum ::= "enum" name "{" case* "}" *)
-let parse_enum st ~pub ~dtraits : Ast.decl =
-  ignore (P.advance st);
-  (* 'enum' *)
-  let nt = P.peek st in
-  let name =
-    match nt.kind with
-    | Token.Ident n ->
-        ignore (P.advance st);
-        n
-    | _ ->
-        P.error st nt.span "expected an enum name";
-        ""
-  in
-  Parser_extern.check_not_error_name st "enum" name nt.span;
-  (* an enum carries no positional trait after its name (every enum is open;
-     shape-level traits like @doc are leading, handled by parse_decl) *)
-  ignore (P.expect st Token.LBrace "'{' to open the enum body");
-  let cases = parse_enum_cases st in
-  ignore (P.expect st Token.RBrace "'}' to close the enum body");
-  {
-    Ast.dname = name;
-    dname_span = nt.span;
-    pub;
-    dtraits;
-    dkind = Ast.DEnum { cases };
-  }
+(* ── Operations ────────────────────────────────────────────────────────── *)
 
 (* op_impl ::= "impl" handle_call — an op's own bespoke body. "impl" is a
    contextual keyword here (only recognized right after an op's traits,
@@ -538,7 +253,9 @@ let parse_struct_items st :
     | _ -> false
   in
   let rec go members ops langs =
-    let leading = parse_item_traits st ~what:"member or op" ~starts_item in
+    let leading =
+      Parser_traits.parse_item_traits st ~what:"member or op" ~starts_item
+    in
     match (P.peek st).kind with
     | Token.RBrace | Token.Eof ->
         (List.rev members, List.rev ops, List.rev langs)
@@ -575,7 +292,7 @@ let parse_struct st ~pub ~dtraits : Ast.decl =
         ""
   in
   Parser_extern.check_not_error_name st "struct" name nt.span;
-  let params = parse_generics st in
+  let params = Parser_type.parse_generics st in
   ignore (P.expect st Token.LBrace "'{' to open the struct body");
   let members, ops, slangs = parse_struct_items st in
   ignore (P.expect st Token.RBrace "'}' to close the struct body");
