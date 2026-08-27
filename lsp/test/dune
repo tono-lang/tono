@@ -1,6 +1,6 @@
 (tests
- (names analysis_test analysis_ext_test binding_check_test)
- (modules analysis_test analysis_ext_test binding_check_test)
+ (names analysis_test analysis_ext_test binding_check_test foreign_test)
+ (modules analysis_test analysis_ext_test binding_check_test foreign_test)
  (libraries tono_lsp_lib tono_frontend lsp alcotest))
 
 ; The example ext block is the outline fixture, copied next to the test.

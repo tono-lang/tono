@@ -16,7 +16,7 @@ module Ext_sites = Tono_frontend.Ext_sites
 type pair = { ext : string; lang : string }
 
 (* The check accepts either spelling and reports under the short one. *)
-let normalize_lang = function "typescript" -> "ts" | l -> l
+let normalize_lang = Analysis_ext.normalize_lang
 
 (* --- the language regions of an ext --- *)
 
@@ -140,6 +140,31 @@ let pin ~(manifest : string option) (p : pair) : string =
       String.concat "\n" versions
       ^ "\n"
       ^ section ~manifest:m ("[target." ^ target ^ "]")
+
+(* The version the manifest pins for the pair in [ext.<name>]: the value
+   of the language's key, quotes and a trailing comment stripped. *)
+let version_in_manifest ~(manifest : string) (p : pair) : string option =
+  List.find_map
+    (fun line ->
+      match String.index_opt line '=' with
+      | None -> None
+      | Some i ->
+          let k = String.trim (String.sub line 0 i) in
+          if normalize_lang k <> p.lang then None
+          else
+            let v =
+              String.trim (String.sub line (i + 1) (String.length line - i - 1))
+            in
+            let v =
+              match String.index_opt v '#' with
+              | Some j -> String.trim (String.sub v 0 j)
+              | None -> v
+            in
+            let n = String.length v in
+            if n >= 2 && v.[0] = '"' && v.[n - 1] = '"' then
+              Some (String.sub v 1 (n - 2))
+            else Some v)
+    (String.split_on_char '\n' (section ~manifest ("[ext." ^ p.ext ^ "]")))
 
 let key ~(text : string) ~(manifest : string option) (f : Ast.file) (p : pair) :
     string =

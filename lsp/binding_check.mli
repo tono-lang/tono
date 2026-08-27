@@ -27,6 +27,9 @@ val key :
   pair ->
   string
 
+(* The version the manifest pins for the pair in [ext.<name>], if any. *)
+val version_in_manifest : manifest:string -> pair -> string option
+
 (* The pair's path line (else the ext's name): where a note about the whole
    pair is shown. *)
 val anchor : Tono_frontend.Ast.file -> pair -> Tono_frontend.Span.span option

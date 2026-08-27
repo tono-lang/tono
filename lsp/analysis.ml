@@ -267,6 +267,11 @@ let trait_hover ~markdown ~text (t : Ast.trait) : Hover.t option =
         (mk_hover ~markdown ~text ~code:(Printer.print_trait t)
            ~prose:(Some prose) t.Ast.tspan)
 
+(* Without a lookup from the server (a test, a client with no project)
+   every pair's index is missing, and a spelling offers nothing. *)
+let no_index : Foreign_index.lookup =
+ fun ~ext:_ ~lang:_ -> Foreign_index.Missing "the editor has no index lookup"
+
 (* Keyword, primitive, and marker hover resolve through the real lexer, so the
    word set can never drift from what the language accepts. hook, contract,
    and constraint are plain identifiers that only read as constructs right
@@ -331,8 +336,8 @@ let ext_word_hover ~markdown ~text (off : int) : Hover.t option =
    declaration), a map-indexed match form (subject index, "null", "._"), an
    ext block word, a trait, then the token layer (keywords, primitives, the ?
    marker). *)
-let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
-    (pos : Position.t) : Hover.t option =
+let hover_at ?(foreign = no_index) ~(markdown : bool) ~(text : string)
+    ~(file : Ast.file) (pos : Position.t) : Hover.t option =
   let off = offset_of_position text pos in
   match
     List.find_opt
@@ -369,12 +374,21 @@ let hover_at ~(markdown : bool) ~(text : string) ~(file : Ast.file)
                       | Some h -> Some h
                       | None -> (
                           match
-                            List.find_opt
-                              (fun (t : Ast.trait) -> contains t.Ast.tspan off)
-                              (file_traits file)
+                            Analysis_foreign.lang_hover ~lookup:foreign
+                              ~toks:(fst (Lexer.tokenize text))
+                              off
                           with
-                          | Some t -> trait_hover ~markdown ~text t
-                          | None -> token_hover ~markdown ~text off))))))
+                          | Some (code, prose, span) ->
+                              Some (mk_hover ~markdown ~text ~code ~prose span)
+                          | None -> (
+                              match
+                                List.find_opt
+                                  (fun (t : Ast.trait) ->
+                                    contains t.Ast.tspan off)
+                                  (file_traits file)
+                              with
+                              | Some t -> trait_hover ~markdown ~text t
+                              | None -> token_hover ~markdown ~text off)))))))
 
 let definition_at ~(uri : DocumentUri.t) ~(text : string) ~(file : Ast.file)
     (pos : Position.t) : Location.t option =
@@ -435,29 +449,6 @@ let ext_kind_items : CompletionItem.t list =
       ("constraint", "bespoke constraint");
       ("impl", "bespoke operation implementation");
     ]
-
-(* The words of an ext library block, offered by frame: what may open a
-   declaration in an ext body or a handle body, and the lines (as `word:`)
-   of a language block. The prose is the hover's, so the two never drift. *)
-let ext_word_item ?(suffix = "") (word : string) : CompletionItem.t =
-  let documentation =
-    Option.map (fun d -> `String d) (Hover_docs.construct_doc word)
-  in
-  CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
-    ~detail:"ext block" ~insertText:(word ^ suffix) ?documentation ()
-
-let ext_frame_items (frame : Analysis_ext.frame) : CompletionItem.t list option
-    =
-  let open Analysis_ext in
-  match frame with
-  | Ext -> Some (List.map ext_word_item [ "struct"; "op" ])
-  | Struct -> Some [ ext_word_item "op" ]
-  | Lang ->
-      Some
-        (List.map
-           (ext_word_item ~suffix:": ")
-           Tono_frontend.Ext_lib_vocab.lang_fields)
-  | Op | Block | Other -> None
 
 (* The @str:: catalog, offered after the separator. *)
 let str_catalog_items : CompletionItem.t list =
@@ -532,9 +523,16 @@ let is_ident_char c =
    trait, a trailing `:` wants a type (member types), and an open non-trait
    paren wants a type too (op input,
    variant payload). Anything else gets the flat list. *)
-let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
-    CompletionItem.t list =
+let rec completions ?(foreign = no_index) ~(text : string) ~(file : Ast.file)
+    (pos : Position.t) : CompletionItem.t list =
   let off = offset_of_position text pos in
+  let toks = fst (Lexer.tokenize text) in
+  match Analysis_foreign.site_at ~text ~toks off with
+  | Some site -> Analysis_foreign.completion ~lookup:foreign ~file site
+  | None when Analysis_foreign.inside ~toks off -> []
+  | None -> completions_outside ~toks ~text ~file off
+
+and completions_outside ~toks ~text ~file off =
   let rec bol i =
     if i <= 0 then 0 else if text.[i - 1] = '\n' then i else bol (i - 1)
   in
@@ -607,8 +605,7 @@ let completions ~(text : string) ~(file : Ast.file) (pos : Position.t) :
   let ext_frame =
     match call_ns with
     | Some _ -> None
-    | None ->
-        ext_frame_items (Analysis_ext.frame_at (fst (Lexer.tokenize text)) off)
+    | None -> Analysis_ext.ext_frame_items (Analysis_ext.frame_at toks off)
   in
   let type_context =
     if unclosed_parens > 0 then not (String.contains before '@')

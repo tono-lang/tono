@@ -3,7 +3,9 @@
  (modules
   analysis
   analysis_ext
+  analysis_foreign
   analysis_match
+  foreign_index
   hover_docs
   project
   binding_check)

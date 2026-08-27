@@ -19,6 +19,9 @@ module Vocab = Tono_frontend.Ext_lib_vocab
 let contains (s : Span.span) (off : int) : bool =
   s.start.offset <= off && off <= s.finish.offset
 
+(* [typescript] and [ts] are one language to every consumer of a block. *)
+let normalize_lang = function "typescript" -> "ts" | l -> l
+
 (* --- where the cursor is, read off the token stream --- *)
 
 (* The braces of an ext block nest as ext { op { lang { ... } } } and
@@ -28,7 +31,13 @@ let contains (s : Span.span) (off : int) : bool =
    which completions apply. Read from tokens rather than the AST because the
    parser collapses the span of an unclosed block, and completion runs
    mid-edit, on unclosed blocks. *)
-type frame = Ext | Struct | Op | Lang | Block | Other
+type frame =
+  | Ext of string (* the ext's name *)
+  | Struct
+  | Op
+  | Lang of string (* the language word that opened the block *)
+  | Block of string
+  | Other
 
 type state = {
   stack : frame list;
@@ -46,11 +55,11 @@ let step (st : state) (k : Token.kind) : state =
   | Token.LBrace ->
       let frame =
         match (top st, st.pending, st.prev, st.prev2) with
-        | _, _, Some (Token.Ident _), Some Token.KwExt -> Ext
-        | Ext, Some Token.KwStruct, _, _ -> Struct
-        | (Ext | Struct), Some Token.KwOp, _, _ -> Op
-        | Op, _, Some (Token.Ident _), _ -> Lang
-        | (Ext | Struct), None, Some (Token.Ident _), _ -> Block
+        | _, _, Some (Token.Ident name), Some Token.KwExt -> Ext name
+        | Ext _, Some Token.KwStruct, _, _ -> Struct
+        | (Ext _ | Struct), Some Token.KwOp, _, _ -> Op
+        | Op, _, Some (Token.Ident lang), _ -> Lang lang
+        | (Ext _ | Struct), None, Some (Token.Ident lang), _ -> Block lang
         | _ -> Other
       in
       { st' with stack = frame :: st.stack; pending = None }
@@ -59,21 +68,26 @@ let step (st : state) (k : Token.kind) : state =
       | _ :: rest -> { st' with stack = rest; pending = None }
       | [] -> st')
   | (Token.KwStruct | Token.KwOp) as kw
-    when match top st with Ext | Struct -> true | _ -> false ->
+    when match top st with Ext _ | Struct -> true | _ -> false ->
       { st' with pending = Some kw }
   | _ -> st'
 
 let initial = { stack = []; pending = None; prev = None; prev2 = None }
 
-(* The frame the cursor is in: fold the tokens that end before [off]. *)
-let frame_at (toks : Token.t list) (off : int) : frame =
-  let st =
-    List.fold_left
-      (fun st (t : Token.t) ->
-        if t.span.finish.offset <= off then step st t.kind else st)
-      initial toks
-  in
-  top st
+(* The state after the tokens that end before [off]: the frame stack the
+   cursor is in and the two tokens before it. *)
+let state_at (toks : Token.t list) (off : int) : state =
+  List.fold_left
+    (fun st (t : Token.t) ->
+      if t.span.finish.offset <= off then step st t.kind else st)
+    initial toks
+
+(* The frame the cursor is in. *)
+let frame_at (toks : Token.t list) (off : int) : frame = top (state_at toks off)
+
+(* The ext that owns a frame stack, if one does. *)
+let ext_of (stack : frame list) : string option =
+  List.find_map (function Ext name -> Some name | _ -> None) stack
 
 (* The construct word the token at [off] spells, if any: a language-block
    line (call/yields/returns) inside a language block, and the leading-dot
@@ -91,7 +105,9 @@ let word_at (toks : Token.t list) (off : int) : string option =
     | (t : Token.t) :: rest ->
         if contains t.span off && is_ident t then
           match t.kind with
-          | Token.Ident w when List.mem w Vocab.lang_fields && top st = Lang ->
+          | Token.Ident w
+            when List.mem w Vocab.lang_fields
+                 && match top st with Lang _ -> true | _ -> false ->
               Some w
           | Token.Ident w
             when String.equal w Vocab.request_ref
@@ -105,6 +121,26 @@ let word_at (toks : Token.t list) (off : int) : string option =
         else go (step st t.kind) rest
   in
   go initial toks
+
+(* --- what a block offers --- *)
+
+(* A construct word as a completion item, documented by the same prose the
+   hover shows, so the two never drift. *)
+let ext_word_item ?(suffix = "") (word : string) : CompletionItem.t =
+  let documentation =
+    Option.map (fun d -> `String d) (Hover_docs.construct_doc word)
+  in
+  CompletionItem.create ~label:word ~kind:CompletionItemKind.Keyword
+    ~detail:"ext block" ~insertText:(word ^ suffix) ?documentation ()
+
+(* The words a block accepts: the declarations of an ext body or a handle
+   body, and the lines (as `word:`) of a language block. *)
+let ext_frame_items (frame : frame) : CompletionItem.t list option =
+  match frame with
+  | Ext _ -> Some (List.map ext_word_item [ "struct"; "op" ])
+  | Struct -> Some [ ext_word_item "op" ]
+  | Lang _ -> Some (List.map (ext_word_item ~suffix:": ") Vocab.lang_fields)
+  | Op | Block _ | Other -> None
 
 (* --- the declared externs --- *)
 
