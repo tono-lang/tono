@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 /// A model whose Go module carries a union, so Go splits into two files while
 /// Rust and TypeScript stay single-file.
-fn union_model() -> Model {
+pub(super) fn union_model() -> Model {
     Model {
         tono_ir_version: 3,
         modules: vec![Module {

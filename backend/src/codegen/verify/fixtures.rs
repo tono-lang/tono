@@ -386,3 +386,42 @@ pub fn gearbox_module() -> Module {
         tests: vec![],
     }
 }
+
+/// `module` with `gearbox` bound in `lang` alone: an ext bound in several
+/// languages is gated on a declared test covering it, which a generation of
+/// the types (what a probe compiles beside) runs into.
+pub fn bind_only(module: &mut Module, lang: &str) {
+    for lib in &mut module.ext_libs {
+        lib.langs.retain(|l| l.lang == lang);
+        for decl in lib
+            .externs
+            .iter_mut()
+            .chain(lib.types.iter_mut().flat_map(|t| t.methods.iter_mut()))
+        {
+            decl.langs.retain(|l| l.lang == lang);
+        }
+    }
+}
+
+/// The module a toolchain probe test compiles: `gearbox` bound in `lang`
+/// alone, cut down to the `dial` handle with its first method and the
+/// `open` constructor, the two shapes a small stand-in library declares.
+pub fn probe_consumer_module(lang: &str) -> Module {
+    let mut m = gearbox_module();
+    bind_only(&mut m, lang);
+    let lib = &mut m.ext_libs[0];
+    lib.structs.clear();
+    lib.externs.retain(|d| d.name == "open");
+    lib.types[0].methods.truncate(1);
+    m
+}
+
+/// Whether no probe scratch directory is left under `root`.
+pub fn scratch_free(root: &std::path::Path) -> bool {
+    std::fs::read_dir(root).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tono-check")
+    })
+}

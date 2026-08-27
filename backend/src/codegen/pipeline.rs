@@ -117,10 +117,7 @@ pub fn parse_targets(csv: &str) -> Result<Vec<TargetKind>, String> {
 /// paths see only effective names), every union's id (so Go can give a struct
 /// field a container `UnmarshalJSON` even when its union type is in another
 /// module), and the derived set of shapes the SDK exposes.
-fn prepare(
-    model: &Model,
-    config: &CodegenConfig,
-) -> (Model, std::collections::HashSet<String>, Exposed) {
+fn prepare(model: &Model, config: &CodegenConfig) -> Prepared {
     let model = modules::apply(config, model);
     let union_ids: std::collections::HashSet<String> = model
         .modules
@@ -130,26 +127,66 @@ fn prepare(
         .map(|s| s.id.clone())
         .collect();
     let exposed = visibility::derive(&model);
-    (model, union_ids, exposed)
+    Prepared {
+        model,
+        union_ids,
+        exposed,
+    }
+}
+
+/// What [`prepare`] computed once for every target's emission.
+struct Prepared {
+    model: Model,
+    union_ids: std::collections::HashSet<String>,
+    exposed: Exposed,
+}
+
+/// Which groups an emission keeps: the whole SDK, or only the type
+/// declarations a probe compiles against (see [`generate_types`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Keep {
+    Everything,
+    TypesOnly,
+}
+
+impl Keep {
+    /// The types-only cut keeps each module's public `types` group and every
+    /// SDK-root group (the support types and the helpers a types file may
+    /// import), which is exactly the closure a types file's own imports
+    /// reach: a codec, an entry, an ext-glue or a test group is what imports
+    /// the foreign library and the codec helpers, and none of them is needed
+    /// to name a generated type.
+    fn keeps(self, group: &crate::codegen::group::Group) -> bool {
+        match self {
+            Keep::Everything => true,
+            Keep::TypesOnly => group.module.is_none() || group.name == crate::codegen::group::TYPES,
+        }
+    }
 }
 
 /// Emit one target's files over an already-prepared model, with the given casing:
 /// every group's source file, then the per-module re-exports that make the public
-/// groups reachable.
+/// groups reachable. The `keep` cut is applied after every group has been
+/// indexed, so a kept file's references still re-point at the file that declares
+/// them; the re-exports are only written for the whole SDK.
 fn emit_target(
-    model: &Model,
+    prepared: &Prepared,
     target: TargetKind,
     casing: &CasingConfig,
     config: &CodegenConfig,
-    union_ids: &std::collections::HashSet<String>,
-    exposed: &Exposed,
+    keep: Keep,
 ) -> Vec<GeneratedFile> {
+    let model = &prepared.model;
     let mut module_files: Vec<ModuleFile> =
         shared_files(model, target, casing).into_iter().collect();
     module_files.extend(assemble::support_file(model, target));
     for module in &model.modules {
         module_files.extend(emit_module_files(
-            module, target, casing, union_ids, exposed,
+            module,
+            target,
+            casing,
+            &prepared.union_ids,
+            &prepared.exposed,
         ));
     }
     // One pass over the emitted groups records where each symbol ended up; the
@@ -170,6 +207,9 @@ fn emit_target(
         Vec::with_capacity(module_files.len());
     let mut files: Vec<GeneratedFile> = Vec::with_capacity(module_files.len());
     for module_file in module_files {
+        if !keep.keeps(&module_file.group) {
+            continue;
+        }
         let path = output_path(target, &module_file.group);
         let shared = module_file.group.is_internal() && public_units.contains(&path);
         let text = render_module(&module_file, target, config, shared);
@@ -189,6 +229,7 @@ fn emit_target(
         groups.push((module_file.group, exports));
     }
     files.extend(match target {
+        _ if keep != Keep::Everything => Vec::new(),
         // Rust needs a module tree so the crate paths resolve, and the `pub use`
         // in it is the module's re-export. Go needs neither: a module is one
         // package already.
@@ -256,18 +297,38 @@ pub fn generate(
     crate::codegen::entries::validate_entries(model, targets)?;
     crate::codegen::declared_tests::validate_declared_tests(model, targets)?;
     crate::codegen::ops::validate_error_codes(model)?;
-    let (model, union_ids, exposed) = prepare(model, config);
+    let prepared = prepare(model, config);
     let mut files = Vec::new();
     for &target in targets {
         files.extend(emit_target(
-            &model,
+            &prepared,
             target,
             &casing_for(target),
             config,
-            &union_ids,
-            &exposed,
+            Keep::Everything,
         ));
     }
+    reject_duplicate_paths(&files)?;
+    reject_unfilled_slots(&files)?;
+    Ok(files)
+}
+
+/// One target's emission under an explicit casing, gated and checked the way
+/// [`generate`] is, keeping the groups `keep` names.
+fn generate_kept(
+    model: &Model,
+    target: TargetKind,
+    config: &CodegenConfig,
+    casing: &CasingConfig,
+    keep: Keep,
+) -> Result<Vec<GeneratedFile>, String> {
+    crate::codegen::extensions::validate_extensions(model)?;
+    crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
+    crate::codegen::entries::validate_entries(model, &[target])?;
+    crate::codegen::declared_tests::validate_declared_tests(model, &[target])?;
+    crate::codegen::ops::validate_error_codes(model)?;
+    let prepared = prepare(model, config);
+    let files = emit_target(&prepared, target, casing, config, keep);
     reject_duplicate_paths(&files)?;
     reject_unfilled_slots(&files)?;
     Ok(files)
@@ -284,18 +345,29 @@ pub fn generate_target(
     config: &CodegenConfig,
     casing: &CasingConfig,
 ) -> Result<Vec<GeneratedFile>, String> {
-    crate::codegen::extensions::validate_extensions(model)?;
-    crate::codegen::extensions::validate_impl_coverage(model, &[target.binding_langs()])?;
-    crate::codegen::entries::validate_entries(model, &[target])?;
-    crate::codegen::declared_tests::validate_declared_tests(model, &[target])?;
-    crate::codegen::ops::validate_error_codes(model)?;
-    let (model, union_ids, exposed) = prepare(model, config);
-    let files = emit_target(&model, target, casing, config, &union_ids, &exposed);
-    reject_duplicate_paths(&files)?;
-    reject_unfilled_slots(&files)?;
-    Ok(files)
+    generate_kept(model, target, config, casing, Keep::Everything)
+}
+
+/// Generate only what a foreign-binding probe compiles against: each module's
+/// `types` file and the SDK-root files it may import (the support types, the
+/// helper groups), rendered by the same pipeline [`generate_target`] runs, so
+/// a probe naming a generated type is graded against the declaration the SDK
+/// will carry. No codec, entry, ext-glue, test or re-export file is emitted:
+/// those are what import the foreign library, and a probe grades that
+/// crossing on its own lines. Subject to the same gate as [`generate`], so a
+/// model generation refuses yields the refusal here too.
+pub fn generate_types(
+    model: &Model,
+    target: TargetKind,
+    config: &CodegenConfig,
+    casing: &CasingConfig,
+) -> Result<Vec<GeneratedFile>, String> {
+    generate_kept(model, target, config, casing, Keep::TypesOnly)
 }
 
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "pipeline_types_tests.rs"]
+mod types_tests;

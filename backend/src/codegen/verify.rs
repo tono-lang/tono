@@ -18,6 +18,20 @@
 //! not a failure but a line in the report: the declaration stands
 //! unchecked and the report says so.
 //!
+//! A binding may name one of the module's own types (`#(Memo<.reading>)`, a
+//! parameter typed `reading`, a struct passed as a class). The probe compiles
+//! beside those types: the SDK's type declarations are generated in memory
+//! by the same pipeline `tono gen` runs ([`generated_types`]) and written
+//! into the scratch directory, and the probe sits where the emitted ext glue
+//! would, in the module's own package or directory, naming them exactly as
+//! the glue does. This makes the check depend on the emitter for the types
+//! it names, which is the intent (the tono side is what the library is
+//! confronted with), and it also means a defect in an emitted types file is
+//! not a finding here: it surfaces as the probe failing outside a binding,
+//! and the target compiler on the generated SDK stays the gate for the
+//! emitter itself. When generation refuses the model, the types are not
+//! there, and every binding that needs them is listed with that reason.
+//!
 //! The per-target probe writers live next to the emitters they mirror
 //! (`targets::go::entry::verify`, `targets::typescript::entry::verify`).
 //! Rust bindings are reported as unchecked: reading a crate's signatures
@@ -30,7 +44,11 @@ use std::process::Command;
 
 use serde::Deserialize;
 
+use crate::codegen::casing::CaseStyle;
+use crate::codegen::modules::{self, CodegenConfig};
+use crate::codegen::symbol::SymbolKind;
 use crate::codegen::targets::{go, typescript};
+use crate::codegen::{casing_for, layout, GeneratedFile, TargetKind};
 use crate::config::normalize_ext_lang;
 use crate::ir::{ExtLib, Model, Module};
 
@@ -185,14 +203,199 @@ pub struct Report {
     pub checked: Vec<String>,
 }
 
-/// Where each target's library is resolved from: a directory inside the
-/// consumer tree for that language (a Go module that requires the library,
-/// a tree whose `node_modules` holds the package). `None` leaves that
+/// One target's consumer tree, and how `tono gen` lays that target out:
+/// the probe compiles beside the SDK's own type declarations, generated
+/// under the same module mapping and casing the manifest gives the target,
+/// so what the probe names is what the SDK will carry.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TargetRoot {
+    /// A directory inside the consumer tree for that language (a Go module
+    /// that requires the library, a tree whose `node_modules` holds the
+    /// package).
+    pub dir: PathBuf,
+    pub config: CodegenConfig,
+    /// The manifest's casing overrides, layered on the language default.
+    pub casing: Vec<(SymbolKind, CaseStyle)>,
+}
+
+impl TargetRoot {
+    /// A root under the default layout: no manifest steering the target.
+    pub fn plain(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            ..Self::default()
+        }
+    }
+}
+
+/// Where each target's library is resolved from. `None` leaves that
 /// language unchecked.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LibRoots {
-    pub go: Option<PathBuf>,
-    pub ts: Option<PathBuf>,
+    pub go: Option<TargetRoot>,
+    pub ts: Option<TargetRoot>,
+}
+
+/// Whether the generated SDK's type declarations stand beside the probe,
+/// or why they do not (the model does not generate). A binding that names a
+/// generated type needs them; without them it is listed as skipped, with
+/// the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sdk {
+    Present,
+    Absent(String),
+}
+
+impl Sdk {
+    /// `Ok` when the SDK's types are beside the probe; else why `what` (a
+    /// spelling, a parameter, a class reference) cannot be probed.
+    pub fn require(&self, what: &str) -> Result<(), String> {
+        match self {
+            Sdk::Present => Ok(()),
+            Sdk::Absent(reason) => Err(format!(
+                "{what} needs the generated SDK's types, which are not beside the probe ({reason})"
+            )),
+        }
+    }
+}
+
+/// The name a probe writes for one of the module's own shapes (`id` as the
+/// IR names it), as the generated types file declares it: `Err` when the
+/// types are not beside the probe, when the shape belongs to another module
+/// (the check materializes the ext's own module), or when it is an entry or
+/// a config (construction, not a declaration of the types file).
+pub fn generated_shape(module: &Module, sdk: &Sdk, id: &str) -> Result<String, String> {
+    let name = crate::codegen::entries::local_name(id);
+    if let Some((owner, _)) = id.split_once('#') {
+        if owner != module.name {
+            return Err(format!(
+                "{name} is a type of module {owner}, outside the ext's module"
+            ));
+        }
+    }
+    sdk.require(&format!("{name}, one of the module's own types,"))?;
+    let shape = module
+        .shapes
+        .iter()
+        .find(|s| crate::codegen::entries::local_name(&s.id) == name);
+    if let Some(shape) = shape {
+        if matches!(
+            shape.kind,
+            crate::ir::ShapeKind::Entry { .. } | crate::ir::ShapeKind::Config { .. }
+        ) {
+            return Err(format!("{name} is an entry, not a type"));
+        }
+    }
+    crate::codegen::entries::generated_type_name(module, name)
+        .ok_or_else(|| format!("{name} is not a type of module {}", module.name))
+}
+
+/// The SDK's type declarations for one target, generated in memory by the
+/// pipeline `tono gen` runs (`pipeline::generate_types`): each module's
+/// `types` file and the SDK-root files it may import, nothing that imports
+/// the foreign library.
+#[derive(Debug)]
+pub struct GeneratedTypes {
+    target: TargetKind,
+    files: Vec<GeneratedFile>,
+}
+
+/// Generate the type declarations the probe compiles beside, under the
+/// root's layout. `Err` is the pipeline's own refusal of the model.
+pub fn generated_types(
+    model: &Model,
+    target: TargetKind,
+    config: &CodegenConfig,
+    root: &TargetRoot,
+) -> Result<GeneratedTypes, String> {
+    let mut casing = casing_for(target);
+    for &(kind, style) in &root.casing {
+        casing = casing.with(kind, style);
+    }
+    let files = crate::codegen::pipeline::generate_types(model, target, config, &casing)?;
+    Ok(GeneratedTypes { target, files })
+}
+
+impl GeneratedTypes {
+    /// Write the files under `dir`, laid out as `tono gen` lays the target
+    /// out (the `<target>/` prefix dropped), unformatted: the toolchain
+    /// reads them, nobody else does.
+    pub fn write(&self, dir: &Path) -> std::io::Result<()> {
+        for file in &self.files {
+            let relative = file
+                .path
+                .strip_prefix(self.target.dir())
+                .unwrap_or(&file.path);
+            let path = dir.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, &file.text)?;
+        }
+        Ok(())
+    }
+
+    /// The files' paths relative to the target root, in emission order.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.files
+            .iter()
+            .map(|f| {
+                f.path
+                    .strip_prefix(self.target.dir())
+                    .unwrap_or(&f.path)
+                    .to_path_buf()
+            })
+            .collect()
+    }
+}
+
+/// The module path of the Go module `dir` sits in: the `module` directive of
+/// the nearest `go.mod` above it, with the directory that holds it. `Err`
+/// when no `go.mod` is found, which is also where `go build` would stop.
+pub fn go_module_of(dir: &Path) -> Result<(String, PathBuf), String> {
+    for ancestor in dir.ancestors() {
+        let go_mod = ancestor.join("go.mod");
+        let Ok(text) = std::fs::read_to_string(&go_mod) else {
+            continue;
+        };
+        let path = text
+            .lines()
+            .map(str::trim)
+            .find_map(|l| {
+                l.strip_prefix("module ")
+                    .map(|m| m.trim().trim_matches('"'))
+            })
+            .filter(|m| !m.is_empty())
+            .ok_or_else(|| format!("{} declares no module path", go_mod.display()))?;
+        return Ok((path.to_string(), ancestor.to_path_buf()));
+    }
+    Err(format!(
+        "no go.mod above {} (the check needs the consumer's Go module to compile the probe in)",
+        dir.display()
+    ))
+}
+
+/// The import path the probe's scratch tree has inside the consumer's Go
+/// module: the module path plus the scratch directory's path under the
+/// module's root, which is what the generated files' own imports (the
+/// support package, another module's package) are prefixed with.
+fn scratch_go_module(scratch: &Path, root_dir: &Path) -> Result<String, String> {
+    let (module_path, module_dir) = go_module_of(root_dir)?;
+    let module_dir = std::fs::canonicalize(&module_dir).unwrap_or(module_dir);
+    let scratch = std::fs::canonicalize(scratch).unwrap_or_else(|_| scratch.to_path_buf());
+    let relative = scratch.strip_prefix(&module_dir).map_err(|_| {
+        format!(
+            "{} is not inside the Go module at {}",
+            scratch.display(),
+            module_dir.display()
+        )
+    })?;
+    let mut path = module_path;
+    for segment in relative.components() {
+        path.push('/');
+        path.push_str(&segment.as_os_str().to_string_lossy());
+    }
+    Ok(path)
 }
 
 /// One error the toolchain reported, located on a probe line.
@@ -439,7 +642,7 @@ pub fn verify(model: &Model, sites: &[Site], roots: &LibRoots) -> Result<Report,
     let mut report = Report::default();
     for module in &model.modules {
         for lib in &module.ext_libs {
-            verify_lib(&mut report, module, lib, sites, roots)?;
+            verify_lib(&mut report, model, module, lib, sites, roots)?;
         }
     }
     Ok(report)
@@ -447,6 +650,7 @@ pub fn verify(model: &Model, sites: &[Site], roots: &LibRoots) -> Result<Report,
 
 fn verify_lib(
     report: &mut Report,
+    model: &Model,
     module: &Module,
     lib: &ExtLib,
     sites: &[Site],
@@ -465,8 +669,26 @@ fn verify_lib(
                 lib.name
             )),
             Some(root) => {
-                let probe = go::entry::verify::probe(module, lib);
-                let outcome = go::entry::verify::run(root, &probe).map_err(|e| e.to_string())?;
+                let scratch = Scratch::create(&root.dir, "go").map_err(|e| e.to_string())?;
+                // The generated files import each other through the scratch
+                // tree's own path inside the consumer's module, so the
+                // module path the manifest gives the SDK is replaced here.
+                let sdk = match scratch_go_module(&scratch.dir, &root.dir) {
+                    Ok(go_module) => {
+                        let config = CodegenConfig {
+                            go_module: Some(go_module),
+                            ..root.config.clone()
+                        };
+                        materialize(model, TargetKind::Go, &config, root, &scratch)?
+                    }
+                    Err(reason) => Sdk::Absent(reason),
+                };
+                let canonical = modules::canonicalize(&root.config, &module.name);
+                let module_dir = layout::module_dir(&canonical);
+                let package = layout::package_name(&canonical);
+                let probe = go::entry::verify::probe(module, lib, &sdk, package);
+                let outcome = go::entry::verify::run(&scratch, &module_dir, &probe)
+                    .map_err(|e| e.to_string())?;
                 fold_outcome(report, outcome, &probe, sites, &lib.name, "go")?;
             }
         }
@@ -478,13 +700,37 @@ fn verify_lib(
                 lib.name
             )),
             Some(root) => {
-                let probe = typescript::entry::verify::probe(module, lib);
-                let outcome = typescript::entry::verify::run(root, &probe).map_err(|e| e.to_string())?;
+                let scratch = Scratch::create(&root.dir, "ts").map_err(|e| e.to_string())?;
+                let sdk = materialize(model, TargetKind::TypeScript, &root.config, root, &scratch)?;
+                let canonical = modules::canonicalize(&root.config, &module.name);
+                let module_dir = layout::module_dir(&canonical);
+                let probe = typescript::entry::verify::probe(module, lib, &sdk);
+                let outcome = typescript::entry::verify::run(&scratch, &module_dir, &probe)
+                    .map_err(|e| e.to_string())?;
                 fold_outcome(report, outcome, &probe, sites, &lib.name, "ts")?;
             }
         }
     }
     Ok(())
+}
+
+/// Generate the SDK's types for `target` and write them into the scratch
+/// tree. A model the pipeline refuses leaves the types absent, with the
+/// refusal as the reason; an unwritable scratch tree is an error.
+fn materialize(
+    model: &Model,
+    target: TargetKind,
+    config: &CodegenConfig,
+    root: &TargetRoot,
+    scratch: &Scratch,
+) -> Result<Sdk, String> {
+    match generated_types(model, target, config, root) {
+        Ok(types) => {
+            types.write(&scratch.dir).map_err(|e| e.to_string())?;
+            Ok(Sdk::Present)
+        }
+        Err(reason) => Ok(Sdk::Absent(reason)),
+    }
 }
 
 #[cfg(test)]

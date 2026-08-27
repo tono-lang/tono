@@ -63,8 +63,13 @@ divergence is reported at the `.tono` line that declared it, like any other
 diagnostic, instead of in a generated file. The library is resolved the way
 the generated SDK resolves it, from that target's `out` directory (a Go module
 requiring it, a `node_modules` holding it), or from `--lib-root <lang>=<dir>`.
-A library with no type source to read (no module, no `.d.ts`) leaves its
-bindings unchecked, and the report says so; Rust bindings are always reported
+A binding that names one of the module's own types (`#(Memo<.reading>)`, a
+parameter typed by a generated struct) is checked beside the SDK's type
+declarations, generated in memory for the check and written next to the
+probe, so nothing has to be generated first (`--module <name>` names the
+module the way `tono gen` would, when the file stem is not it). A library
+with no type source to read (no module, no `.d.ts`) leaves its bindings
+unchecked, and the report says so; Rust bindings are always reported
 unchecked until rustdoc's JSON output leaves nightly. Only the check needs a
 target toolchain; `tono gen` never does.
 

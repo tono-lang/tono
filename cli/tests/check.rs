@@ -316,3 +316,137 @@ fn usage_errors_are_reported() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("<lang>=<dir>"));
 }
+
+/// A binding that names one of the module's own types is checked beside the
+/// generated types: the handle is `Dial<.summary>` and the constructor
+/// takes the generated struct, which the library's declarations accept; a
+/// method declaring `string` where the library answers that struct is the
+/// finding, at the method's span, with nothing left unchecked for naming a
+/// generated type.
+#[test]
+fn ts_bindings_naming_a_generated_type_are_checked_beside_it() {
+    let cmd = skip_without_frontend!();
+    skip_without!("tsc");
+    let dir = tmp("ts-generated");
+    let root = ts_root(&dir);
+    let src = "\
+ext gearbox {
+  ts { #(@example/gearbox) }
+
+  struct dial {
+    ts { #(Dial<.summary>) }
+
+    op read(): string {
+      ts { call: #(read)() }
+    }
+  }
+
+  op open(value: summary): dial {
+    ts { call: #(new Dial)(value) }
+  }
+}
+
+struct summary {
+  label: string
+}
+
+pub struct client {
+  seed: summary @arg
+  dial: gearbox.dial = gearbox.open(.seed)
+
+  op read(): string
+    impl .dial.read()
+}
+";
+    let file = write(&dir.join("svc.tono"), src);
+    let (ok, err) = run(cmd, &file, &[("ts", &root)]);
+    assert!(!ok, "{err}");
+    assert!(
+        err.contains(
+            "8:18-25: error: FX0001: ts binding of method dial.read in ext gearbox: error TS2322: Type 'Summary' is not assignable to type 'string'."
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("not checked"), "{err}");
+
+    // Declared as the library answers it, the same file passes.
+    let cmd = skip_without_frontend!();
+    let src = src.replace("op read(): string", "op read(): summary");
+    let file = write(&dir.join("svc.tono"), &src);
+    let (ok, err) = run(cmd, &file, &[("ts", &root)]);
+    assert!(ok, "{err}");
+    assert!(
+        err.contains("checked: ts bindings of ext gearbox (tsc)"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Go probe is a file of the module's own package beside the generated
+/// `types.go`: `Dial[.summary]` is written with the generated Summary, the
+/// library's generic instantiates over it, and a method declaring `string`
+/// where the library answers that struct is the finding at the method's span.
+#[test]
+fn go_bindings_naming_a_generated_type_are_checked_beside_it() {
+    let cmd = skip_without_frontend!();
+    skip_without!("go");
+    let dir = tmp("go-generated");
+    let root = go_root(&dir);
+    let src = "\
+ext gearbox {
+  go { #(example.test/gearbox) }
+
+  struct dial {
+    go { #(Dial[.summary]) }
+
+    op read(): string {
+      go { call: #(Read)(#(ctx context.Context)) }
+    }
+  }
+
+  op open(value: summary): dial {
+    go { call: #(Open[.summary])(value) }
+  }
+}
+
+struct summary {
+  label: string
+}
+
+pub struct client {
+  seed: summary @arg
+  dial: gearbox.dial = gearbox.open(.seed)
+
+  op read(): string
+    impl .dial.read()
+}
+";
+    let file = write(&dir.join("svc.tono"), src);
+    let (ok, err) = run(cmd, &file, &[("go", &root)]);
+    assert!(!ok, "{err}");
+    // The Go compiler's wording of the operand's type varies by release
+    // ("value of type Summary", "value of struct type Summary"): the span,
+    // the site and both types are what the finding must carry.
+    let finding = err
+        .lines()
+        .find(|l| l.contains("FX0001"))
+        .unwrap_or_else(|| panic!("no finding in:\n{err}"));
+    assert!(
+        finding.starts_with(
+            "8:18-48: error: FX0001: go binding of method dial.read in ext gearbox: cannot use tonoRecv.Read(ctx) (value of"
+        ) && finding.ends_with("Summary) as string value in assignment"),
+        "{finding}"
+    );
+    assert!(!err.contains("not checked"), "{err}");
+
+    let cmd = skip_without_frontend!();
+    let src = src.replace("op read(): string", "op read(): summary");
+    let file = write(&dir.join("svc.tono"), &src);
+    let (ok, err) = run(cmd, &file, &[("go", &root)]);
+    assert!(ok, "{err}");
+    assert!(
+        err.contains("checked: go bindings of ext gearbox (go build)"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

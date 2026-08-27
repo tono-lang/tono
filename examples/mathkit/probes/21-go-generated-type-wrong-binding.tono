@@ -1,0 +1,36 @@
+// Capability 21 (Go): a wrong binding inside the family that names a
+// generated type. The handle spells `#(*Memo[.reading])`, so what its
+// `Recall` answers is the module's own Reading; the method declares
+// `string`. Before the check compiled beside the generated types, every
+// binding of this family was reported unchecked and the mismatch was only
+// found by the Go compiler on a generated line; now the check refuses it on
+// this file, at the method's span, before anything is generated (expected:
+// check-red).
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct memo {
+    go { #(*Memo[.reading]) }
+
+    op recall(): string {
+      go { call: #(Recall)(#(ctx context.Context)) }
+    }
+  }
+
+  op remember(seed: reading): memo {
+    go { call: #(Remember[.reading])(seed) }
+  }
+}
+
+struct reading {
+  value: float
+  label: string
+}
+
+pub struct client {
+  seed: reading @arg
+  memo: mathkit.memo = mathkit.remember(.seed)
+
+  op recall(): string
+    impl .memo.recall()
+}
