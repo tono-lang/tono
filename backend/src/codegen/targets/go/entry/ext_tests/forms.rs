@@ -116,3 +116,105 @@ fn a_form_spelling_with_no_conversion_is_refused_naming_both_types() {
     )
     .is_ok());
 }
+
+/// The module with one wire struct, `reading`, whose `sample_rate` member
+/// is renamed for Go and whose `note` member is optional.
+fn module_with_reading() -> Module {
+    let mut module = bare_module();
+    module.shapes.push(structure(
+        "m#reading",
+        vec![
+            member("value", Tref::Prim(Prim::Float), true),
+            crate::codegen::test_support::member_with(
+                "sample_rate",
+                Tref::Prim(Prim::U32),
+                true,
+                vec![crate::codegen::test_support::trait_of(
+                    "core#rename",
+                    serde_json::json!({ "go": "Hz" }),
+                )],
+            ),
+            member("note", string_t(), false),
+        ],
+    ));
+    module
+}
+
+fn reading_literal(fields: &[(&str, &[&str])]) -> CallArg {
+    CallArg::Ctor(CallCtor {
+        name: "reading".into(),
+        fields: fields
+            .iter()
+            .map(|(k, path)| {
+                (
+                    (*k).to_string(),
+                    CallArg::Ref(path.iter().map(|s| (*s).to_string()).collect()),
+                )
+            })
+            .collect(),
+        spelling: None,
+    })
+}
+
+/// A literal naming none of the lib's forms builds one of the module's own
+/// structs: the generated type's composite literal, its fields named as
+/// the types file names them (cased, `@rename(go)` honored), no package
+/// selector, and an optional member left out keeps Go's zero value.
+#[test]
+fn a_literal_of_a_generated_struct_is_the_generated_types_own_literal() {
+    let lib = lib_with_options_form();
+    let module = module_with_reading();
+    let mut refs = Vec::new();
+    let mut ref_expr = |path: &[String]| format!("s.{}", path.join("."));
+    let out = ext::call_arg_expr(
+        &mut refs,
+        &module,
+        &lib,
+        &reading_literal(&[("value", &["v"]), ("sample_rate", &["rate"])]),
+        &[],
+        &[],
+        "ctx",
+        &mut ref_expr,
+    );
+    assert_eq!(out, "Reading{Hz: s.rate, Value: s.v}");
+}
+
+/// The literal written at the call site (`remember(reading { .. })`)
+/// reaches the block's `call:` line through the `Param` it substitutes,
+/// the same substitution a reference to a field of that type goes
+/// through: the two render into the same position, differing only in the
+/// argument expression.
+#[test]
+fn a_generated_literal_and_a_reference_substitute_the_same_param() {
+    let lib = lib_with_options_form();
+    let module = module_with_reading();
+    let params = vec![ext_param(
+        "seed",
+        Tref::Ref {
+            id: "m#reading".into(),
+            args: vec![],
+        },
+    )];
+    let render_site = |site_arg: CallArg| {
+        let mut refs = Vec::new();
+        let mut ref_expr = |path: &[String]| format!("s.{}", path.join("."));
+        ext::call_arg_expr(
+            &mut refs,
+            &module,
+            &lib,
+            &CallArg::Param("seed".into()),
+            &params,
+            &[site_arg],
+            "ctx",
+            &mut ref_expr,
+        )
+    };
+    assert_eq!(render_site(CallArg::Ref(vec!["seed".into()])), "s.seed");
+    assert_eq!(
+        render_site(reading_literal(&[
+            ("value", &["v"]),
+            ("sample_rate", &["rate"])
+        ])),
+        "Reading{Hz: s.rate, Value: s.v}"
+    );
+}

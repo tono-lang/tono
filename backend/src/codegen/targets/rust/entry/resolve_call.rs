@@ -137,12 +137,14 @@ fn spelled_type(module: &Module, t: &Tref) -> String {
     }
 }
 
-/// A foreign struct literal: the form's own Rust type, from its `rust`
+/// A struct literal: a foreign form's own Rust type, from its `rust`
 /// block, with each field's value converted when the block spells the field
-/// under its own type. `values` are the already-rendered field values, in
-/// the ctor's own (key-sorted) order. A form with no `rust` block does not
-/// exist in Rust; `validate_calls::foreign_form_declared` refuses the
-/// binding first.
+/// under its own type; or, when the name is none of the lib's forms, the
+/// literal of one of the module's own structs (see
+/// [`generated_ctor_expr`]). `values` are the already-rendered field
+/// values, in the ctor's own (key-sorted) order. A form with no `rust`
+/// block does not exist in Rust; `validate_calls::foreign_forms_declared`
+/// refuses the binding first.
 pub(super) fn ctor_expr(
     module: &Module,
     lib: &ExtLib,
@@ -151,9 +153,12 @@ pub(super) fn ctor_expr(
     values: &[String],
 ) -> String {
     let form = lib.structs.iter().find(|s| s.name == ctor.name);
+    if form.is_none() {
+        return generated_ctor_expr(module, lib, ctor, values);
+    }
     let Some(block) = form.and_then(|f| f.lang("rust")) else {
         panic!(
-            "foreign struct {:?} declares no rust block; validate_calls::foreign_form_declared should have refused it",
+            "foreign struct {:?} declares no rust block; validate_calls::foreign_forms_declared should have refused it",
             ctor.name
         );
     };
@@ -184,6 +189,60 @@ pub(super) fn ctor_expr(
             panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
         }),
     }
+}
+
+/// The literal of one of the module's own structs, built where a call
+/// passes it (`cfg { host: .h }` into a crate generic over the caller's
+/// type): the generated type's own struct literal, `Cfg { host: h }`, the
+/// same value the binding could pass by reference to a field of that type.
+/// The type and its fields are the ones the types module emits (the casing
+/// engine, `@rename(rust)` honored), in scope through `types::*` like every
+/// generated type this glue names, so nothing is crate-qualified. Rust has
+/// no zero value, so an optional member the literal leaves out is written
+/// `None`. No foreign block is involved: the struct is not the crate's.
+/// `validate_calls::foreign_forms_declared` refuses a name that is not a
+/// buildable wire struct before generation.
+fn generated_ctor_expr(
+    module: &Module,
+    lib: &ExtLib,
+    ctor: &CallCtor,
+    values: &[String],
+) -> String {
+    let (shape, members) = crate::codegen::entries::literal_struct(module, &ctor.name)
+        .unwrap_or_else(|| {
+            panic!(
+                "struct literal {:?} names no form of ext {} and no wire struct of module {}; validate_calls::foreign_forms_declared should have refused it",
+                ctor.name, lib.name, module.name
+            )
+        });
+    let config = super::super::types::rust_casing();
+    let ident =
+        |m: &crate::ir::Member| crate::codegen::conventions::field_ident(m, &config, "rust");
+    let mut rendered: Vec<String> = ctor
+        .fields
+        .keys()
+        .zip(values)
+        .map(|(field_name, expr)| {
+            let member = members
+                .iter()
+                .find(|m| m.name == *field_name)
+                .unwrap_or_else(|| {
+                    panic!("struct {} declares no field {field_name}; validate_calls::foreign_forms_declared should have refused it", ctor.name)
+                });
+            format!("{}: {expr}", ident(member))
+        })
+        .collect();
+    rendered.extend(
+        members
+            .iter()
+            .filter(|m| !m.required && !ctor.fields.contains_key(&m.name))
+            .map(|m| format!("{}: None", ident(m))),
+    );
+    format!(
+        "{} {{ {} }}",
+        crate::codegen::conventions::type_ident(shape, "rust"),
+        rendered.join(", ")
+    )
 }
 
 pub(super) fn find_rust_lang(decl: &ExternDecl) -> &ExternLang {

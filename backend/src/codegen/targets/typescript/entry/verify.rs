@@ -232,10 +232,20 @@ fn arg_expr(
             Ok(format!("{}({})", cx.qualify(&sc.symbol), args.join(", ")))
         }
         CallArg::Ctor(c) => {
+            // A literal of one of the module's own structs is a value the
+            // generated SDK defines, like a parameter of that type.
             let form = cx.lib.structs.iter().find(|s| s.name == c.name);
             let block = form
-                .and_then(|s| ts_block(&s.langs))
-                .ok_or_else(|| format!("the struct literal {} has no ts block", c.name))?;
+                .ok_or_else(|| {
+                    format!(
+                        "the struct literal {} builds a type the generated SDK defines",
+                        c.name
+                    )
+                })
+                .and_then(|s| {
+                    ts_block(&s.langs)
+                        .ok_or_else(|| format!("the struct literal {} has no ts block", c.name))
+                })?;
             cx.sdk_terms(&block.name)?;
             let fields = c
                 .fields

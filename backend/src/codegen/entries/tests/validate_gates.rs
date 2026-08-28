@@ -649,7 +649,23 @@ fn an_injected_handle_nested_in_a_ctor_argument_is_still_refused() {
         fields: std::collections::BTreeMap::from([("x".to_string(), call_ref(&["injected"]))]),
         spelling: None,
     });
-    let m = model_with_forwarding_call(injected_source(), vec![ctor_arg]);
+    let mut m = model_with_forwarding_call(injected_source(), vec![ctor_arg]);
+    // `opts` is a form the lib declares for Go, so the literal itself is
+    // buildable and only the nested ref is at fault.
+    m.modules[0].ext_libs[0]
+        .structs
+        .push(crate::ir::ForeignStruct {
+            name: "opts".into(),
+            fields: vec![crate::ir::ForeignField {
+                name: "x".into(),
+                r#type: Tref::Prim(crate::ir::Prim::String),
+            }],
+            langs: vec![crate::ir::ForeignLang {
+                lang: "go".into(),
+                name: "Opts".into(),
+                fields: Default::default(),
+            }],
+        });
     let err = validate_entries(&m, &[TargetKind::Go]).unwrap_err();
     assert!(err.contains("combined"), "{err}");
     assert!(err.contains("injected"), "{err}");

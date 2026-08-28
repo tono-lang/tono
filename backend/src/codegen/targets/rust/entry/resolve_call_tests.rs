@@ -455,6 +455,51 @@ fn coerce_knows_some_borrow_and_identity_and_refuses_the_rest() {
     assert!(err.contains("no conversion from String to u8"), "{err}");
 }
 
+/// A literal naming none of the lib's forms builds one of the module's own
+/// structs: the generated type's struct literal, its fields named as the
+/// types module names them (`@rename(rust)` honored), not crate-qualified,
+/// and an optional member the literal leaves out written `None`, since
+/// Rust has no zero value to fall back on.
+#[test]
+fn ctor_expr_builds_a_generated_struct_as_its_own_literal() {
+    use crate::codegen::test_support::{member, member_with, structure, trait_of};
+    let module = module_of(vec![structure(
+        "m#reading",
+        vec![
+            member("value", Tref::Prim(Prim::Float), true),
+            member_with(
+                "sample_rate",
+                Tref::Prim(Prim::U32),
+                true,
+                vec![trait_of("core#rename", serde_json::json!({ "rust": "hz" }))],
+            ),
+            member("note", Tref::Prim(Prim::String), false),
+        ],
+    )]);
+    let lib = lib("companyconfig", "company-config", vec![]);
+    let ctor = CallCtor {
+        name: "reading".into(),
+        fields: [
+            ("sample_rate".to_string(), CallArg::Ref(vec!["rate".into()])),
+            ("value".to_string(), CallArg::Ref(vec!["v".into()])),
+        ]
+        .into_iter()
+        .collect(),
+        spelling: None,
+    };
+    let out = ctor_expr(
+        &module,
+        &lib,
+        "company_config",
+        &ctor,
+        &["(rate).clone()".to_string(), "(v).clone()".to_string()],
+    );
+    assert_eq!(
+        out,
+        "Reading { hz: (rate).clone(), value: (v).clone(), note: None }"
+    );
+}
+
 /// A form's literal names the library's own type from its `rust` block and
 /// converts a field the block spells under another type.
 #[test]

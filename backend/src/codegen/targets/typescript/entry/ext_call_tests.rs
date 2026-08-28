@@ -120,7 +120,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
 /// `service`/`region` (`@arg`), `config` (a plain call, `load`-shaped),
 /// `bus` (a `@with`-fallback call onto the opaque handle,
 /// `connect`-shaped, reading `config`'s own resolved members).
-fn appendix_fields() -> Vec<EntryField> {
+pub(super) fn appendix_fields() -> Vec<EntryField> {
     let (config, bus) = super::super::ext_fixtures::appendix_config_and_bus_fields(
         "m#app_config",
         "companybus#publisher",
@@ -133,7 +133,7 @@ fn appendix_fields() -> Vec<EntryField> {
     ]
 }
 
-fn appendix_module(fields: Vec<EntryField>) -> Module {
+pub(super) fn appendix_module(fields: Vec<EntryField>) -> Module {
     Module {
         tests: vec![],
         name: "m".into(),
@@ -163,7 +163,7 @@ fn rendered_decls(module: &Module) -> Vec<Decl> {
     decls
 }
 
-fn rendered_text(module: &Module) -> String {
+pub(super) fn rendered_text(module: &Module) -> String {
     rendered(&rendered_decls(module), &TsRules)
 }
 

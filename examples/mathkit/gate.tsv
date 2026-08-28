@@ -96,3 +96,13 @@ bench	rust	service.tono	pass
 # before anything is generated.
 21-ts-generated-type-wrong-binding	typescript	probes/21-ts-generated-type-wrong-binding.tono	check-red
 21-go-generated-type-wrong-binding	go	probes/21-go-generated-type-wrong-binding.tono	check-red
+# 22: a literal of one of the module's own structs, built inline as the
+# argument of a foreign call (remember(reading { value: .value, label:
+# .label }), a generic instantiated over the caller's type). Capability 14
+# passes the same value by reference to a field; the literal is the same
+# value written where it is passed, and every target renders it as the
+# generated type's own literal, never as a foreign form. Before this row the
+# generator died on the literal in Go and Rust.
+22-go-generated-struct-literal	go	probes/22-go-generated-struct-literal.tono	pass
+22-rust-generated-struct-literal	rust	probes/22-rust-generated-struct-literal.tono	pass
+22-ts-generated-struct-literal	typescript	probes/22-ts-generated-struct-literal.tono	pass

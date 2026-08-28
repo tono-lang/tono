@@ -1,0 +1,36 @@
+// Capability 22: a literal of one of the module's own structs, built inline
+// as the argument of a foreign call. remember<T> is instantiated over the
+// generated `reading` (capability 14 passes the same value by reference to
+// a field); here the value is written where it is passed, `reading { .. }`,
+// and the emitter renders the literal of the type it generates, never a
+// foreign form: the struct declares no rust block because it is not the
+// crate's.
+ext mathkit {
+  rust { #(mathkit) }
+
+  struct memo {
+    rust { #(Memo<.reading>) }
+
+    op recall(): reading {
+      rust { call: #(recall)() }
+    }
+  }
+
+  op remember(seed: reading): memo {
+    rust { call: #(remember)(seed) }
+  }
+}
+
+struct reading {
+  value: float
+  label: string
+}
+
+pub struct client {
+  value: float @arg
+  label: string @arg
+  memo: mathkit.memo = mathkit.remember(reading { value: .value, label: .label })
+
+  op recall(): reading
+    impl .memo.recall()
+}
