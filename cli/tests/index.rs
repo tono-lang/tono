@@ -285,7 +285,25 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
         return;
     };
     let dir = tmp("ts");
-    let pkg = dir.join("sdk/ts/node_modules/@example/gearbox");
+    // The tree a user has: `tono init` scaffolds the manifest and the SDK's
+    // own package.json (`"type": "module"`) under dist/typescript, and the
+    // library is installed there. The helper runs under that package.json.
+    let init = tono()
+        .unwrap()
+        .args(["init", "--target", "typescript", "--yes"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let sdk = dir.join("dist/typescript");
+    assert!(std::fs::read_to_string(sdk.join("package.json"))
+        .unwrap()
+        .contains("\"type\": \"module\""));
+    let pkg = sdk.join("node_modules/@example/gearbox");
     write(
         &pkg.join("package.json"),
         "{\"name\":\"@example/gearbox\",\"version\":\"0.0.0\",\"types\":\"index.d.ts\"}",
@@ -313,10 +331,11 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
         &pkg.join("extra.d.ts"),
         "export declare class Gauge { level(): number }\n",
     );
-    write(&dir.join("sdk/ts/package-lock.json"), "{}");
+    write(&sdk.join("package-lock.json"), "{}");
+    let manifest = std::fs::read_to_string(dir.join("tono.toml")).unwrap();
     write(
         &dir.join("tono.toml"),
-        "[project]\nname = \"svc\"\n\n[target.typescript]\nout = \"sdk/ts\"\n\n[ext.gearbox]\nts = \"0.0.0\"\n",
+        &format!("{manifest}\n[ext.gearbox]\nts = \"0.0.0\"\n"),
     );
     let file = write(&dir.join("svc.tono"), TS_SOURCE);
     cmd.env("TONO_TYPESCRIPT", &api);
@@ -331,7 +350,10 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
     assert_eq!(index["key"]["package"], "@example/gearbox");
     assert_eq!(index["key"]["version"], "0.0.0");
     let lockfile = index["key"]["lockfile"]["path"].as_str().unwrap();
-    assert!(lockfile.ends_with("sdk/ts/package-lock.json"), "{lockfile}");
+    assert!(
+        lockfile.ends_with("dist/typescript/package-lock.json"),
+        "{lockfile}"
+    );
     // FNV-1a 64 of "{}", the lockfile's bytes.
     assert_eq!(index["key"]["lockfile"]["digest"], "08f44b07b5901a25");
     let names: Vec<&str> = index["symbols"]
@@ -417,6 +439,18 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
     assert_eq!(util["members"][1]["kind"], "function");
     assert_eq!(by("Options")["kind"], "interface");
     assert_eq!(by("Options")["members"][0]["signatures"][0], "Size");
+    // As a user runs it: from the project directory, the file relative.
+    let before = std::fs::read(&path).unwrap();
+    let mut relative = tono().unwrap();
+    relative
+        .current_dir(&dir)
+        .env("TONO_TYPESCRIPT", &api)
+        .args(["index", "svc.tono", "--json"]);
+    let out = relative.output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains("\"kind\":\"built\""), "{stdout}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -30,19 +30,16 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/tono-ts-index.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/sdk/ts"
+# The tree a user has: what `tono init` scaffolds (the manifest, the SDK's
+# own package.json under dist/typescript), the library installed there.
 (
-    cd "$work/sdk/ts"
-    npm init -y --silent >/dev/null
+    cd "$work"
+    TONO_FRONTEND="$frontend" "$tono" init --target typescript --yes >/dev/null 2>&1
+    cd dist/typescript
     npm install --silent --ignore-scripts "$package@$version" typescript@5 >/dev/null
 )
 ext="$(echo "$package" | sed 's#^@##; s#[^A-Za-z0-9]#_#g')"
-cat >"$work/tono.toml" <<EOF
-[project]
-name = "probe"
-
-[target.typescript]
-out = "sdk/ts"
+cat >>"$work/tono.toml" <<EOF
 
 [ext.$ext]
 ts = "$version"

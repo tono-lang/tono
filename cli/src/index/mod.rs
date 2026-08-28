@@ -222,9 +222,26 @@ pub(crate) fn parse_helper_output(text: &str) -> Result<Outcome, String> {
     })
 }
 
+/// The line of a failed helper's stderr that says what failed: the first
+/// naming an error or a throw (node prints the stack and then its version
+/// banner, which would be the last line), else the last non-empty line.
+pub(crate) fn failure_line(stderr: &str) -> &str {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines
+        .iter()
+        .find(|l| l.contains("Error") || l.contains("error") || l.starts_with("throw "))
+        .or(lines.last())
+        .copied()
+        .unwrap_or("printed no report")
+}
+
 /// Start a helper program and read its report. A program that cannot start
 /// is the toolchain missing (a skip the user can act on); a program that
-/// ran and printed no report failed, and its last stderr line says why.
+/// ran and printed no report failed, and its stderr says why.
 pub(crate) fn run_helper(
     program: &str,
     args: &[&str],
@@ -238,15 +255,10 @@ pub(crate) fn run_helper(
     let stdout = String::from_utf8_lossy(&output.stdout);
     match parse_helper_output(&stdout) {
         Ok(outcome) => Ok(outcome),
-        Err(_) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let last = stderr
-                .lines()
-                .map(str::trim)
-                .rfind(|l| !l.is_empty())
-                .unwrap_or("printed no report");
-            Err(format!("{program} extractor: {last}"))
-        }
+        Err(_) => Err(format!(
+            "{program} extractor: {}",
+            failure_line(&String::from_utf8_lossy(&output.stderr))
+        )),
     }
 }
 
@@ -350,6 +362,10 @@ fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
         )
     })?;
     let cfg = manifest::Config::load(&manifest_path)?;
+    // Absolute from here on: the helpers run from a scratch directory of
+    // their own and resolve the library from the root they are given, and
+    // the index records paths the editor reads back from anywhere.
+    let manifest_path = std::fs::canonicalize(&manifest_path).unwrap_or(manifest_path);
     let manifest_dir = manifest_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -705,6 +721,15 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "sh extractor: last line");
+        // A node crash: the stack, the error, then the version banner.
+        assert_eq!(
+            failure_line(
+                "/x/extract.cjs:1\nconst path = require(\"path\");\n\nReferenceError: require is not defined in ES module scope\n    at file:///x/extract.cjs:1:14\n\nNode.js v22.19.0\n"
+            ),
+            "ReferenceError: require is not defined in ES module scope"
+        );
+        assert_eq!(failure_line("throw err;\n^\nsomething\n"), "throw err;");
+        assert_eq!(failure_line("  \n"), "printed no report");
         let err = run_helper("sh", &["-c", "exit 1"], &dir, "not installed").unwrap_err();
         assert_eq!(err, "sh extractor: printed no report");
         match run_helper("sh", &["-c", "echo '{\"skipped\":\"why\"}'"], &dir, "x").unwrap() {

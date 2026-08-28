@@ -3,6 +3,10 @@
 // Run by `tono index` with node from a scratch directory inside the consumer
 // tree, so the package resolves the way the generated SDK's imports do.
 //
+// The file is CommonJS by extension (`.cjs`): the scratch directory it runs
+// from sits under the SDK's own `package.json`, which declares
+// `"type": "module"`, and node would read a `.js` there as an ES module.
+//
 // The compiler API is what resolves re-exports (`export * from`, `export {
 // a as b } from`, `export =`), overloads, and the difference between a
 // class's static and instance members: this script only walks what the
@@ -11,7 +15,7 @@
 // beside the library, or the `typescript-api` alias), because the native
 // compiler shipped as `typescript` 7 has no scripting API.
 //
-// Usage: node extract.js <root> <package> <api candidate>...
+// Usage: node extract.cjs <root> <package> <api candidate>...
 "use strict";
 
 const path = require("path");
@@ -40,7 +44,7 @@ function loadApi(candidates) {
 
 const [root, pkg, ...candidates] = process.argv.slice(2);
 if (!root || !pkg) {
-  process.stderr.write("usage: extract.js <root> <package> <api candidate>...\n");
+  process.stderr.write("usage: extract.cjs <root> <package> <api candidate>...\n");
   process.exit(2);
 }
 const ts = loadApi(candidates);

@@ -1,5 +1,5 @@
 //! The TypeScript extractor's Rust side: where the compiler API is looked
-//! for and how the helper runs. The reading itself is `helpers/extract.js`,
+//! for and how the helper runs. The reading itself is `helpers/extract.cjs`,
 //! run by the consumer's own `node` inside their tree.
 
 use std::path::{Path, PathBuf};
@@ -8,7 +8,13 @@ use tono_backend::codegen::verify::Scratch;
 
 use super::{run_helper, Outcome};
 
-const HELPER: &str = include_str!("helpers/extract.js");
+const HELPER: &str = include_str!("helpers/extract.cjs");
+
+/// The helper's name in the scratch directory. The `.cjs` extension is
+/// load-bearing: the scratch sits under the SDK's `package.json`, which
+/// declares `"type": "module"`, and node reads a `.js` there as an ES
+/// module where `require` does not exist.
+const HELPER_FILE: &str = "extract.cjs";
 
 /// The environment variable naming a `typescript` package directory (or its
 /// `lib/typescript.js`) to load the compiler API from, for a tree that has
@@ -58,9 +64,9 @@ pub(crate) fn extract_with(root: &Path, package: &str, api: &[PathBuf]) -> Resul
         )));
     }
     let scratch = Scratch::create(root, "index-ts").map_err(|e| e.to_string())?;
-    std::fs::write(scratch.dir.join("extract.js"), HELPER).map_err(|e| e.to_string())?;
+    std::fs::write(scratch.dir.join(HELPER_FILE), HELPER).map_err(|e| e.to_string())?;
     let root = root.to_string_lossy().into_owned();
-    let mut args: Vec<&str> = vec!["extract.js", &root, package];
+    let mut args: Vec<&str> = vec![HELPER_FILE, &root, package];
     let api: Vec<String> = api
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
