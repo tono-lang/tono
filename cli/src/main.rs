@@ -24,6 +24,7 @@ mod check;
 mod frontend;
 mod gen;
 mod gen_ext;
+mod index;
 mod init;
 mod init_ext;
 mod native_manifest;
@@ -55,6 +56,9 @@ pub(crate) const USAGE: &str = "usage: tono (\n  \
     check <file.tono> [--lib-root <lang>=<dir>]... [--config <tono.toml>] [--module <name>] [--only <ext>=<lang>]... [--json]\n    \
     (an ext block's bindings are checked against the library in that target's out dir, or in --lib-root;\n    \
      --only narrows the check to those ext/language pairs, --json prints the binding report as JSON lines on stdout)\n  \
+    index <file.tono> [--only <ext>=<lang>]... [--config <tono.toml>] [--json]\n    \
+    (writes the symbols of each ext block's library, per language, under .tono/index/ beside the manifest,\n    \
+     for the editor to complete inside #(...) from; the library resolves from that target's out dir)\n  \
     fmt <file.tono>\n  \
     preview <file.tono> --target <list> [--out <dir>] [--watch|--once]\n  \
     playground [--port <n>] [--no-open]\n  \
@@ -82,6 +86,7 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("init") => init::run(&args[2..]),
         Some("gen") => gen::run(&args[2..]),
         Some("check") => check::run(&args[2..]),
+        Some("index") => index::run(&args[2..]),
         Some("fmt") => run_frontend("fmt", &args[2..]),
         Some("preview") => run_preview(&args[2..]),
         #[cfg(feature = "playground")]

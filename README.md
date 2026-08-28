@@ -46,6 +46,7 @@ attached directly to each [release](https://github.com/tono-lang/tono/releases).
 ```
 tono init                # write tono.toml and a build manifest per target
 tono check src/api.tono  # parse and typecheck; check ext bindings against their libraries
+tono index src/api.tono  # write the symbol index of each ext library, for completion inside #(...)
 tono gen                 # generate every enabled target's SDK
 tono gen --clean         # the same, clearing output the spec no longer produces
 ```
@@ -83,6 +84,26 @@ is the command's report, never a second checker, so the editor and `tono
 check` cannot disagree; `--json` is that report as one object per line,
 `--only` narrows a run to the named pairs. The server finds `tono` through
 `TONO_BIN`, next to itself, or on `PATH`.
+
+Completion inside a foreign spelling (`#(...)`) comes from an index of the
+library's symbols, one JSON file per (ext, language) under `.tono/index/`
+beside the manifest, written by `tono index`. Each language has its own
+extractor: Go reads the package's export data through `go/types` from the
+consumer's module, TypeScript asks the compiler API for the module's exports
+(re-exports followed, overloads on one entry; it needs the `typescript`
+package with a scripting API beside the library, or the `typescript-api`
+alias when the tree has the native compiler), Rust parses the crate's
+source located through `cargo metadata` (what a macro produces is not in
+the source, and the hover of the block says so). The index carries the key
+it was built from (the package, the version pinned in `[ext.<name>]`, the
+lockfile's digest), and the editor discards a file whose key no longer
+matches, so a stale suggestion is never served; `tono-lsp` runs `tono index
+<file> --json --only <ext>=<lang>` itself on the first open and on save for
+a pair whose index is missing or stale, and reads the file directly on every
+request. The index is a suggestion, never a verdict: what it offers is
+judged by `tono check` like any other spelling, and a library it cannot
+read offers nothing, with the reason on the hover of the language word that
+opens the block.
 
 Renaming or deleting a module leaves its old output behind, since generation
 only writes. `--clean` sweeps each output directory of generated files the run

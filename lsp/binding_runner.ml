@@ -43,18 +43,24 @@ let tono_bin () : string =
       in
       Option.value ~default:"tono" (List.find_opt Sys.file_exists candidates)
 
-(* The nearest tono.toml above [path], read whole; None without one. *)
-let manifest_for (path : string) : string option =
+(* The nearest tono.toml above [path]; None without one. *)
+let manifest_path_for (path : string) : string option =
   let rec up dir =
     let candidate = Filename.concat dir "tono.toml" in
-    if Sys.file_exists candidate then
-      try Some (In_channel.with_open_bin candidate In_channel.input_all)
-      with Sys_error _ -> None
+    if Sys.file_exists candidate then Some candidate
     else
       let parent = Filename.dirname dir in
       if String.equal parent dir then None else up parent
   in
   up (Filename.dirname path)
+
+(* The nearest tono.toml above [path], read whole; None without one. *)
+let manifest_for (path : string) : string option =
+  match manifest_path_for path with
+  | None -> None
+  | Some candidate -> (
+      try Some (In_channel.with_open_bin candidate In_channel.input_all)
+      with Sys_error _ -> None)
 
 (* --- state, shared between the request thread and the workers --- *)
 
@@ -80,19 +86,16 @@ let error_line (message : string) : string =
 
 type running = { pid : int; out : Unix.file_descr; err_path : string }
 
-(* Start the check for one pair. Its stdin is /dev/null (the editor's stdin
-   is the protocol stream, not the child's); stderr goes to a file so
-   reading stdout to the end can never block on a full stderr pipe. *)
-let spawn ~(bin : string) ~(path : string) (p : BC.pair) :
-    (running, string) result =
+(* Start one `tono` command ([argv], its first element the program). Its
+   stdin is /dev/null (the editor's stdin is the protocol stream, not the
+   child's); stderr goes to a file so reading stdout to the end can never
+   block on a full stderr pipe. *)
+let spawn ~(bin : string) ~(argv : string array) : (running, string) result =
   let err_path = Filename.temp_file "tono-lsp-check" ".err" in
   match
     let err_fd = Unix.openfile err_path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
     let devnull = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
     let r, w = Unix.pipe ~cloexec:true () in
-    let argv =
-      [| bin; "check"; path; "--json"; "--only"; p.ext ^ "=" ^ p.lang |]
-    in
     let pid =
       Fun.protect
         ~finally:(fun () ->
@@ -114,10 +117,11 @@ let spawn ~(bin : string) ~(path : string) (p : BC.pair) :
         (Printf.sprintf "could not run %s (%s); set TONO_BIN to the tono binary"
            bin (Unix.error_message e))
 
-(* Wait for the check and read its report. A run that printed no report and
-   failed is reported through its last stderr line, so a check that could
-   not even start is a diagnostic, never silence. *)
-let collect (r : running) : string list =
+(* Wait for the command and read its report. A run that printed no report
+   and failed is reported through its last stderr line, so a check that
+   could not even start is a diagnostic, never silence. [what] names the
+   command in that line. *)
+let collect ~(what : string) (r : running) : string list =
   let ic = Unix.in_channel_of_descr r.out in
   let out = In_channel.input_all ic in
   close_in ic;
@@ -148,8 +152,8 @@ let collect (r : running) : string list =
       in
       [
         error_line
-          (if last = "" then "tono check " ^ how ^ " and printed no report"
-           else "tono check " ^ how ^ ": " ^ last);
+          (if last = "" then what ^ " " ^ how ^ " and printed no report"
+           else what ^ " " ^ how ^ ": " ^ last);
       ]
 
 (* --- the save-time entry point --- *)
@@ -193,7 +197,15 @@ let schedule ~(path : string) ~(text : string) ~(clean : bool)
         let t0 = Unix.gettimeofday () in
         let bin = tono_bin () in
         let started =
-          List.map (fun (p, k) -> (p, k, spawn ~bin ~path p)) dirty
+          List.map
+            (fun ((p : BC.pair), k) ->
+              let argv =
+                [|
+                  bin; "check"; path; "--json"; "--only"; p.ext ^ "=" ^ p.lang;
+                |]
+              in
+              (p, k, spawn ~bin ~argv))
+            dirty
         in
         let outcomes =
           List.map
@@ -201,7 +213,7 @@ let schedule ~(path : string) ~(text : string) ~(clean : bool)
               ( p,
                 k,
                 match r with
-                | Ok run -> collect run
+                | Ok run -> collect ~what:"tono check" run
                 | Error message -> [ error_line message ] ))
             started
         in

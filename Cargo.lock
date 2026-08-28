@@ -1860,10 +1860,12 @@ dependencies = [
 name = "tono-cli"
 version = "0.0.0"
 dependencies = [
+ "quote",
  "ratatui",
  "rust-embed",
  "serde",
  "serde_json",
+ "syn 2.0.119",
  "tiny_http",
  "tono-backend",
  "tree-sitter",

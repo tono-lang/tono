@@ -29,6 +29,7 @@ val lsp_diagnostics : string -> Diagnostic.t list
    the ? marker. [markdown] selects a fenced tono code block or the plaintext
    fallback for clients without markdown support. *)
 val hover_at :
+  ?foreign:Foreign_index.lookup ->
   markdown:bool ->
   text:string ->
   file:Tono_frontend.Ast.file ->
@@ -48,6 +49,7 @@ val definition_at :
    `ext hook`, primitives plus declared shapes in type position, and the flat
    list of shapes and primitives elsewhere. *)
 val completions :
+  ?foreign:Foreign_index.lookup ->
   text:string ->
   file:Tono_frontend.Ast.file ->
   Position.t ->
