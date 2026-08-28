@@ -536,3 +536,7 @@ pub(super) fn handle_call_assign(
 #[cfg(test)]
 #[path = "ext_call_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ext_literal_tests.rs"]
+mod literal_tests;

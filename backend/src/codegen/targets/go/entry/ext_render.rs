@@ -232,11 +232,13 @@ pub(in super::super) fn call_arg_expr(
     }
 }
 
-/// A foreign struct literal: the form's own Go type, from its `go` block,
+/// A struct literal: a foreign form's own Go type, from its `go` block,
 /// with each field's value converted when the block spells the field under
 /// its own type, and the whole literal converted when the argument spells
-/// how it crosses (`&Options`). A form with no `go` block does not exist in
-/// Go; `validate_calls::foreign_form_declared` refuses the binding first.
+/// how it crosses (`&Options`); or, when the name is none of the lib's
+/// forms, the literal of one of the module's own structs (see
+/// [`generated_ctor_expr`]). A form with no `go` block does not exist in
+/// Go; `validate_calls::foreign_forms_declared` refuses the binding first.
 #[allow(clippy::too_many_arguments)]
 fn ctor_expr(
     refs: &mut Vec<Symbol>,
@@ -252,9 +254,14 @@ fn ctor_expr(
         return "nil".to_string();
     };
     let form = lib.structs.iter().find(|s| s.name == ctor.name);
+    if form.is_none() {
+        return generated_ctor_expr(
+            refs, module, lib, ctor, params, entry_args, ctx_expr, ref_expr,
+        );
+    }
     let Some(block) = form.and_then(|f| f.lang("go")) else {
         panic!(
-            "foreign struct {:?} declares no go block; validate_calls::foreign_form_declared should have refused it",
+            "foreign struct {:?} declares no go block; validate_calls::foreign_forms_declared should have refused it",
             ctor.name
         );
     };
@@ -291,6 +298,61 @@ fn ctor_expr(
             panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
         }),
     }
+}
+
+/// The literal of one of the module's own structs, built where a call
+/// passes it (`cfg { host: .h }` into a library generic over the caller's
+/// type): the generated type's own composite literal, `Cfg{Host: h}`, the
+/// same value the binding could pass by reference to a field of that type.
+/// The type and its fields are the ones the types file emits (the casing
+/// engine, `@rename(go)` honored), in the same package as this glue, so
+/// nothing is qualified or imported; an optional member the literal leaves
+/// out keeps Go's zero value. No foreign block is involved: the struct is
+/// not the library's. `validate_calls::foreign_forms_declared` refuses a
+/// name that is not a buildable wire struct before generation.
+#[allow(clippy::too_many_arguments)]
+fn generated_ctor_expr(
+    refs: &mut Vec<Symbol>,
+    module: &Module,
+    lib: &ExtLib,
+    ctor: &CallCtor,
+    params: &[ExternParam],
+    entry_args: &[CallArg],
+    ctx_expr: &str,
+    ref_expr: &mut dyn FnMut(&[String]) -> String,
+) -> String {
+    let (shape, members) = crate::codegen::entries::literal_struct(module, &ctor.name)
+        .unwrap_or_else(|| {
+            panic!(
+                "struct literal {:?} names no form of ext {} and no wire struct of module {}; validate_calls::foreign_forms_declared should have refused it",
+                ctor.name, lib.name, module.name
+            )
+        });
+    let config = crate::codegen::targets::go::types::go_casing();
+    let fields: Vec<String> = ctor
+        .fields
+        .iter()
+        .map(|(name, value)| {
+            let member = members
+                .iter()
+                .find(|m| m.name == *name)
+                .unwrap_or_else(|| {
+                    panic!("struct {} declares no field {name}; validate_calls::foreign_forms_declared should have refused it", ctor.name)
+                });
+            let expr = call_arg_expr(
+                refs, module, lib, value, params, entry_args, ctx_expr, ref_expr,
+            );
+            format!(
+                "{}: {expr}",
+                crate::codegen::conventions::field_ident(member, &config, "go")
+            )
+        })
+        .collect();
+    format!(
+        "{}{{{}}}",
+        crate::codegen::conventions::type_ident(shape, "go"),
+        fields.join(", ")
+    )
 }
 
 fn yields_path_expr(yields_vars: &HashMap<String, String>, path: &[String]) -> String {

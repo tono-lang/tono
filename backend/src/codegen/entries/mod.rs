@@ -104,14 +104,32 @@ pub fn generated_type_name(module: &Module, canonical: &str) -> Option<String> {
 }
 
 /// The module's own struct a `call:` line may pass as a class reference
-/// (the library constructs the shape itself): a structure with no type
-/// parameters, since a generic has no single class to stand as a value.
-/// `None` when `canonical` names no such shape; an entry, a config, an
-/// enum or a union is never one.
+/// (the library constructs the shape itself) or build inline as a literal
+/// (`cfg { host: .h }` where the library takes the value): a structure with
+/// no type parameters, since a generic has no single class to stand as a
+/// value and no literal instantiates its parameters. `None` when
+/// `canonical` names no such shape; an entry, a config, an enum or a union
+/// is never one.
 pub fn class_struct<'a>(module: &'a Module, canonical: &str) -> Option<&'a crate::ir::Shape> {
     module.shapes.iter().find(|s| {
         local_name(&s.id) == canonical
             && matches!(&s.kind, crate::ir::ShapeKind::Structure { params, .. } if params.is_empty())
+    })
+}
+
+/// The module's own struct a literal builds, with its members in
+/// declaration order; `None` when `canonical` is not a [`class_struct`].
+/// Every target renders the literal from this one pair: the type is named
+/// as the types file names it, the fields the ctor writes are looked up in
+/// the members, and the optional members it leaves out are the ones a
+/// target with no zero value (Rust) fills as absent.
+pub fn literal_struct<'a>(
+    module: &'a Module,
+    canonical: &str,
+) -> Option<(&'a Shape, &'a [Member])> {
+    class_struct(module, canonical).and_then(|s| match &s.kind {
+        ShapeKind::Structure { members, .. } => Some((s, members.as_slice())),
+        _ => None,
     })
 }
 

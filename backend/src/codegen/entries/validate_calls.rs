@@ -91,7 +91,7 @@ pub(super) fn call_resolves(
             call.ns, call.func
         ));
     };
-    extern_binds_every_target(&site, &call.func, module, lib, decl, targets)?;
+    extern_binds_every_target(&site, module, lib, decl, &call.args, targets)?;
     for target in targets {
         handle_storage_declared(&site, *target, module, &field.target)?;
     }
@@ -131,7 +131,7 @@ pub(super) fn handle_call_resolves(
             "{site}: the field is itself a foreign handle; a handle method call only sources a field of a logical (non-handle) type, construct a handle with a free extern call instead"
         ));
     }
-    extern_binds_every_target(&site, &call.method, module, lib, decl, targets)
+    extern_binds_every_target(&site, module, lib, decl, &call.args, targets)
 }
 
 /// An operation's own `impl .field.method(args)` body must name a foreign
@@ -154,7 +154,7 @@ pub(super) fn op_impl_call_resolves(
         call.method
     );
     let (lib, decl) = handle_method_of(module, declared, call, &site)?;
-    extern_binds_every_target(&site, &call.method, module, lib, decl, targets)
+    extern_binds_every_target(&site, module, lib, decl, &call.args, targets)
 }
 
 /// The declared handle method a `.field.method(args)` call site (a field
@@ -207,13 +207,17 @@ fn handle_method_of<'m>(
 
 /// The per-target half of resolving an extern call (free or method): a
 /// language block per target, `yields` projected by a `returns`, and the
-/// single-result rule TypeScript's call convention imposes.
+/// single-result rule TypeScript's call convention imposes. `site_args`
+/// are the caller's own arguments (`= ns.fn(reading { .. })`): a `Param`
+/// of the block's `call:` line substitutes one of them, so a struct
+/// literal written there is rendered by the same emitter as one written in
+/// the block, and is gated the same way.
 fn extern_binds_every_target(
     site: &str,
-    callee: &str,
     module: &Module,
     lib: &crate::ir::ExtLib,
     decl: &ExternDecl,
+    site_args: &[crate::ir::CallArg],
     targets: &[TargetKind],
 ) -> Result<(), String> {
     for target in targets {
@@ -223,7 +227,8 @@ fn extern_binds_every_target(
             .find(|l| target.binding_langs().contains(&l.lang.as_str()))
         else {
             return Err(format!(
-                "{site}: extern {callee} declares no {} block; {} codegen has nothing to emit",
+                "{site}: extern {} declares no {} block; {} codegen has nothing to emit",
+                decl.name,
                 target.binding_langs()[0],
                 target.dir()
             ));
@@ -276,7 +281,8 @@ fn extern_binds_every_target(
         foreign_positions_bind(site, *target, lang)?;
         param_spellings_coerce(site, *target, module, lib, decl, lang)?;
         yields_spelling_coerces(site, *target, decl, lang)?;
-        foreign_forms_declared(site, *target, module, lib, lang)?;
+        foreign_forms_declared(site, *target, module, lib, &lang.call_args)?;
+        foreign_forms_declared(site, *target, module, lib, site_args)?;
         if !target.emits_nested_extern_call_args() && contains_cross_extern_call(&lang.call_args) {
             return Err(format!(
                 "{site}: the {} block's call: line uses another declared extern's call as one of its own arguments; {} codegen cannot render that yet",
@@ -454,21 +460,25 @@ pub(super) fn yields_spelling_coerces(
     Ok(())
 }
 
-/// Every foreign struct literal in a binding names a form that exists for
-/// the target (the form declares a block for it), with every spelled field
-/// coercible from the form's own declared type, and the literal itself
-/// coercible into the spelling its argument declares (`&Options`).
+/// Every struct literal in an argument tree (a block's `call:` line, or the
+/// caller's own arguments it substitutes) builds something the target can
+/// write: a foreign form that exists for the target (the form declares a
+/// block for it), with every spelled field coercible from the form's own
+/// declared type, and the literal itself coercible into the spelling its
+/// argument declares (`&Options`); or one of the module's own structs, see
+/// [`generated_literal_builds`].
 pub(super) fn foreign_forms_declared(
     site: &str,
     target: TargetKind,
     module: &crate::ir::Module,
     lib: &crate::ir::ExtLib,
-    lang: &crate::ir::ExternLang,
+    args: &[crate::ir::CallArg],
 ) -> Result<(), String> {
     let binding_lang = target.binding_langs()[0];
-    for ctor in ctors(&lang.call_args) {
+    for ctor in ctors(args) {
         let name = ctor.name.as_str();
         let Some(form) = lib.structs.iter().find(|s| s.name == name) else {
+            generated_literal_builds(site, binding_lang, module, lib, ctor)?;
             continue;
         };
         let Some(block) = form
@@ -497,6 +507,77 @@ pub(super) fn foreign_forms_declared(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// A struct literal naming no form of the lib builds one of the module's
+/// own structs (`cfg { host: .h }` passed where a library takes the
+/// caller's type, a generic instantiated over it): the value the same
+/// binding could pass by reference, written where it is passed. The
+/// literal renders as the generated type's own literal in every target, so
+/// it must be buildable there: a non-generic wire struct, every field one
+/// of its members, every required member present (an optional one left out
+/// is absent). The frontend types the values but does not resolve the name
+/// at this position, so this gate names what it cannot build instead of
+/// letting an emitter look for a foreign block the struct never declares. A
+/// spelling on the literal has no conversion defined over a generated type
+/// yet and is refused by name.
+fn generated_literal_builds(
+    site: &str,
+    binding_lang: &str,
+    module: &crate::ir::Module,
+    lib: &crate::ir::ExtLib,
+    ctor: &crate::ir::CallCtor,
+) -> Result<(), String> {
+    use crate::ir::ShapeKind;
+    let name = ctor.name.as_str();
+    let head = format!("{site}: the {binding_lang} block's call: line builds {name}, but");
+    let shape = module
+        .shapes
+        .iter()
+        .find(|s| super::local_name(&s.id) == name);
+    let members = match shape.map(|s| &s.kind) {
+        Some(ShapeKind::Structure { params, members }) if params.is_empty() => members,
+        Some(ShapeKind::Structure { .. }) => {
+            return Err(format!(
+                "{head} {name} is a generic struct; a literal has no type arguments to instantiate it with"
+            ));
+        }
+        Some(_) => {
+            return Err(format!(
+                "{head} {name} is not a wire struct; only a struct of ext {} or a wire struct of module {} has a literal to build",
+                lib.name, module.name
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{head} it names neither a struct of ext {} nor a struct of module {}",
+                lib.name, module.name
+            ));
+        }
+    };
+    if let Some(field) = ctor
+        .fields
+        .keys()
+        .find(|f| !members.iter().any(|m| m.name == **f))
+    {
+        return Err(format!("{head} struct {name} declares no field {field}"));
+    }
+    if let Some(member) = members
+        .iter()
+        .find(|m| m.required && !ctor.fields.contains_key(&m.name))
+    {
+        return Err(format!(
+            "{head} the literal leaves out {}, which struct {name} requires",
+            member.name
+        ));
+    }
+    if let Some(spelling) = &ctor.spelling {
+        return Err(format!(
+            "{head} passes the literal as #({spelling}); a literal of a struct of module {} crosses as the type it builds and cannot be spelled",
+            module.name
+        ));
     }
     Ok(())
 }

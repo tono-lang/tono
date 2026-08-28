@@ -110,9 +110,14 @@ pub(super) fn render_arg(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        // A foreign struct literal: each field's value converted when the
-        // form's ts block spells the field under its own type, the same
-        // rule a spelled parameter follows.
+        // A struct literal. A foreign form's: each field's value converted
+        // when the form's ts block spells the field under its own type,
+        // the same rule a spelled parameter follows, the keys the library's
+        // own. One of the module's structs (`cfg { host: .h }`, none of the
+        // lib's forms): an object literal is structural, so the generated
+        // interface needs no name here, but its keys are the ones the types
+        // file emits (the casing engine, `@rename(ts)` honored), never the
+        // canonical names.
         CallArg::Ctor(CallCtor {
             name,
             fields,
@@ -124,6 +129,11 @@ pub(super) fn render_arg(
                     .iter()
                     .find(|l| l.lang == "ts" || l.lang == "typescript")
             });
+            let generated = form
+                .is_none()
+                .then(|| crate::codegen::entries::literal_struct(module, name))
+                .flatten();
+            let casing = super::super::types::ts_casing();
             let rendered = fields
                 .iter()
                 .map(|(k, v)| {
@@ -140,7 +150,13 @@ pub(super) fn render_arg(
                         }
                         _ => value,
                     };
-                    format!("{k}: {value}")
+                    let key = generated
+                        .and_then(|(_, members)| members.iter().find(|m| &m.name == k))
+                        .map_or_else(
+                            || k.clone(),
+                            |m| crate::codegen::conventions::field_ident(m, &casing, "ts"),
+                        );
+                    format!("{key}: {value}")
                 })
                 .collect::<Vec<_>>();
             let literal = format!("{{ {} }}", rendered.join(", "));

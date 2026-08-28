@@ -14,6 +14,8 @@ mod handle_call;
 // mixed loose/entry module rules) live in their own submodule for the same
 // reason.
 mod validate_gates;
+// The generated-struct literal gate at an extern call site, likewise.
+mod generated_literal;
 mod yields_signature;
 
 fn field(name: &str, sources: Vec<Source>) -> EntryField {
