@@ -22,6 +22,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -63,7 +65,11 @@ func skip(format string, args ...interface{}) {
 // the importer needs the dependencies to read the types the package's
 // signatures mention.
 func exportFiles(importPath string) (map[string]string, error) {
-	cmd := exec.Command("go", "list", "-export", "-deps", "-e", "-f", "{{.ImportPath}}\t{{.Export}}\t{{.Error}}", importPath)
+	// The toolchain that compiled this helper is the one whose export data
+	// the importer can read: its own `go`, at a fixed path, never the first
+	// `go` on PATH.
+	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	cmd := exec.Command(goBin, "list", "-export", "-deps", "-e", "-f", "{{.ImportPath}}\t{{.Export}}\t{{.Error}}", importPath)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
