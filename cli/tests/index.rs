@@ -292,11 +292,26 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
     );
     write(
         &pkg.join("index.d.ts"),
-        "export * from \"./more\";\nexport declare class Dial { constructor(value: number); read(): number; }\n",
+        "export * from \"./more\";\n\
+         export { Gauge as Meter } from \"./extra\";\n\
+         /** Build a dial.\n *\n * Second paragraph. */\n\
+         export declare function build(name: string): Dial;\n\
+         export declare function build(name: string, size: number): Dial;\n\
+         export type Size = \"s\" | \"m\";\n\
+         export declare const VERSION: string;\n\
+         export declare const make: (name: string) => Dial;\n\
+         export declare class Dial {\n  constructor(value: number);\n  static create(name: string): Dial;\n  private secret: number;\n  readonly name: string;\n  read(depth?: number): number;\n}\n\
+         export interface Options { size?: Size; verbose: boolean }\n",
     );
     write(
         &pkg.join("more.d.ts"),
-        "export declare function calibrate(d: Dial): void;\n",
+        "export declare function calibrate(d: Dial): void;\n\
+         export declare enum Mode { Fast, Slow }\n\
+         export declare namespace util { function pad(s: string): string; namespace deep { const x: number } }\n",
+    );
+    write(
+        &pkg.join("extra.d.ts"),
+        "export declare class Gauge { level(): number }\n",
     );
     write(&dir.join("sdk/ts/package-lock.json"), "{}");
     write(
@@ -309,7 +324,7 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
     assert!(ok, "{stderr}");
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["kind"], "built", "{lines:?}");
-    assert_eq!(lines[0]["symbols"], 2);
+    assert_eq!(lines[0]["symbols"], 10);
     let path = dir.join(".tono/index/gearbox.ts.json");
     let index: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -325,9 +340,83 @@ fn a_typescript_library_is_indexed_through_the_compiler_api() {
         .iter()
         .map(|s| s["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, vec!["Dial", "calibrate"]);
-    assert_eq!(index["symbols"][0]["kind"], "class");
-    assert_eq!(index["symbols"][0]["members"][0]["name"], "read");
+    assert_eq!(
+        names,
+        vec![
+            "Dial",
+            "Meter",
+            "Mode",
+            "Options",
+            "Size",
+            "VERSION",
+            "build",
+            "calibrate",
+            "make",
+            "util"
+        ]
+    );
+    let by = |n: &str| {
+        index["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == n)
+            .unwrap()
+            .clone()
+    };
+    // Overloads stay on one entry; the doc is the first paragraph.
+    let build = by("build");
+    assert_eq!(build["kind"], "function");
+    assert_eq!(
+        build["signatures"],
+        serde_json::json!(["(name: string): Dial", "(name: string, size: number): Dial"])
+    );
+    assert_eq!(build["doc"], "Build a dial.");
+    // A class: its constructor, statics first, private members out.
+    let dial = by("Dial");
+    assert_eq!(dial["kind"], "class");
+    assert_eq!(dial["signatures"][0], "(value: number): Dial");
+    let members: Vec<(String, String, bool)> = dial["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["name"].as_str().unwrap().into(),
+                m["kind"].as_str().unwrap().into(),
+                m["static"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        members,
+        vec![
+            ("create".to_string(), "method".to_string(), true),
+            ("name".to_string(), "field".to_string(), false),
+            ("read".to_string(), "method".to_string(), false),
+        ]
+    );
+    // Re-exports followed: the glob and the renamed one.
+    assert_eq!(by("calibrate")["kind"], "function");
+    assert_eq!(by("Meter")["kind"], "class");
+    assert_eq!(by("Meter")["members"][0]["name"], "level");
+    assert_eq!(by("make")["kind"], "function");
+    assert_eq!(by("VERSION")["kind"], "const");
+    assert_eq!(by("VERSION")["signatures"][0], "string");
+    assert_eq!(by("Size")["kind"], "type");
+    assert_eq!(by("Size")["signatures"][0], "\"s\" | \"m\"");
+    let mode = by("Mode");
+    assert_eq!(mode["kind"], "enum");
+    assert_eq!(mode["members"][0]["name"], "Fast");
+    assert_eq!(mode["members"][1]["name"], "Slow");
+    let util = by("util");
+    assert_eq!(util["kind"], "namespace");
+    assert_eq!(util["members"][0]["name"], "deep.x");
+    assert_eq!(util["members"][0]["kind"], "const");
+    assert_eq!(util["members"][1]["name"], "pad");
+    assert_eq!(util["members"][1]["kind"], "function");
+    assert_eq!(by("Options")["kind"], "interface");
+    assert_eq!(by("Options")["members"][0]["signatures"][0], "Size");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

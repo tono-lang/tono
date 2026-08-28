@@ -32,18 +32,12 @@ pub(crate) fn extract(root: &Path, import_path: &str) -> Result<Outcome, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{MemberKind, SymbolKind};
 
     fn tmp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("tono-index-go-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    fn write(path: &Path, contents: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, contents).unwrap();
     }
 
     #[test]
@@ -55,107 +49,30 @@ mod tests {
         }
     }
 
+    /// With a module but no such dependency, the helper (when `go` is
+    /// installed) or the missing toolchain (when it is not) is a skip
+    /// naming the cause; the scratch directory is gone either way. The
+    /// helper's reading of a real package is covered end to end by the
+    /// `index` integration suite.
     #[test]
-    fn the_helper_reads_a_stand_in_package_through_the_consumer_module() {
-        if std::process::Command::new("go")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skipping: go is not installed");
-            return;
-        }
-        let dir = tmp("lib");
-        let lib = dir.join("gearbox-go");
-        write(
-            &lib.join("go.mod"),
-            "module example.test/gearbox\n\ngo 1.21\n",
-        );
-        write(
-            &lib.join("gearbox.go"),
-            "package gearbox\n\nimport \"context\"\n\n\
-             // Dial reads a value.\n\
-             type Dial[T any] interface{ Read(ctx context.Context) (T, error) }\n\n\
-             type Options struct { Name string; hidden int }\n\n\
-             func (o *Options) Apply() {}\n\n\
-             type Mode int\n\n\
-             const Fast Mode = 1\n\n\
-             var Version = \"1\"\n\n\
-             func Open[T any](value T, opts ...Options) (Dial[T], error) { return nil, nil }\n\n\
-             func internal() {}\n",
-        );
-        let root = dir.join("consumer-go");
-        write(
-            &root.join("go.mod"),
-            &format!(
-                "module example.test/consumer\n\ngo 1.21\n\nrequire example.test/gearbox v0.0.0\n\nreplace example.test/gearbox => {}\n",
-                lib.display()
+    fn a_package_the_module_does_not_require_is_skipped_and_the_scratch_removed() {
+        let dir = tmp("unknown");
+        std::fs::write(
+            dir.join("go.mod"),
+            "module example.test/consumer\n\ngo 1.21\n",
+        )
+        .unwrap();
+        match extract(&dir, "example.test/nowhere").unwrap() {
+            Outcome::Skipped(reason) => assert!(
+                reason.contains("nowhere") || reason.contains("go is not installed"),
+                "{reason}"
             ),
-        );
-        let (symbols, note) = match extract(&root, "example.test/gearbox").unwrap() {
-            Outcome::Built { symbols, note } => (symbols, note),
-            Outcome::Skipped(reason) => panic!("skipped: {reason}"),
-        };
-        assert!(note.unwrap().contains("no documentation"));
-        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["Dial", "Fast", "Mode", "Open", "Options", "Version"]
-        );
-        let open = &symbols[3];
-        assert_eq!(open.kind, SymbolKind::Function);
-        assert_eq!(
-            open.signatures,
-            vec!["func[T any](value T, opts ...Options) (Dial[T], error)"]
-        );
-        let dial = &symbols[0];
-        assert_eq!(dial.kind, SymbolKind::Interface);
-        assert_eq!(dial.signatures, vec!["Dial[T any]"]);
-        assert_eq!(dial.members[0].name, "Read");
-        assert_eq!(dial.members[0].kind, MemberKind::Method);
-        assert_eq!(
-            dial.members[0].signatures,
-            vec!["func(ctx context.Context) (T, error)"]
-        );
-        let options = &symbols[4];
-        assert_eq!(options.kind, SymbolKind::Struct);
-        let members: Vec<(&str, MemberKind)> = options
-            .members
-            .iter()
-            .map(|m| (m.name.as_str(), m.kind))
-            .collect();
-        assert_eq!(
-            members,
-            vec![("Name", MemberKind::Field), ("Apply", MemberKind::Method)]
-        );
-        assert_eq!(symbols[1].signatures, vec!["Mode = 1"]);
-        assert_eq!(symbols[2].kind, SymbolKind::Type);
-        // The scratch directory is gone with the extractor.
-        assert!(!std::fs::read_dir(&root).unwrap().any(|e| e
+            other => panic!("{other:?}"),
+        }
+        assert!(!std::fs::read_dir(&dir).unwrap().any(|e| e
             .unwrap()
             .file_name()
             .to_string_lossy()
             .starts_with(".tono-check")));
-    }
-
-    #[test]
-    fn a_package_the_module_does_not_require_is_skipped_with_the_reason() {
-        if std::process::Command::new("go")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skipping: go is not installed");
-            return;
-        }
-        let dir = tmp("unknown");
-        write(
-            &dir.join("go.mod"),
-            "module example.test/consumer\n\ngo 1.21\n",
-        );
-        match extract(&dir, "example.test/nowhere").unwrap() {
-            Outcome::Skipped(reason) => assert!(reason.contains("nowhere"), "{reason}"),
-            other => panic!("{other:?}"),
-        }
     }
 }

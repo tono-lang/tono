@@ -188,6 +188,25 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_cargo_cannot_read_is_skipped_with_its_last_line() {
+        if Command::new("cargo").arg("--version").output().is_err() {
+            eprintln!("skipping: cargo is not installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "tono-index-rust-{}-badmanifest",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nversion = \"0.0.0\"\n").unwrap();
+        match extract(&dir, "gearbox", "0.0.0").unwrap() {
+            Outcome::Skipped(reason) => assert!(reason.starts_with("cargo metadata:"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn without_a_cargo_manifest_at_the_root_the_pair_is_skipped() {
         let dir =
             std::env::temp_dir().join(format!("tono-index-rust-{}-nomanifest", std::process::id()));

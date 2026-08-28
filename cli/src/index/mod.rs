@@ -35,9 +35,9 @@ use tono_backend::ir::{decode_model, Model};
 use crate::frontend::Frontend;
 use crate::{check, flag_value, USAGE};
 
-pub(crate) use format::{Index, Key, Symbol};
 #[cfg(test)]
-pub(crate) use format::{MemberKind, SymbolKind};
+pub(crate) use format::SymbolKind;
+pub(crate) use format::{Index, Key, Symbol};
 
 /// The parsed command line.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -260,28 +260,23 @@ fn build_pair(pair: &Pair, root: &Path, version: &str) -> Result<Outcome, String
     }
 }
 
-/// Index every selected pair of `source`: the report lines, in pair order.
-fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
-    let manifest_path = check::manifest_for(source, args.config.as_deref()).ok_or_else(|| {
-        format!(
-            "no {} above {}; pass --config",
-            crate::MANIFEST_NAME,
-            source.display()
-        )
-    })?;
-    let cfg = manifest::Config::load(&manifest_path)?;
-    let manifest_dir = manifest_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-    let frontend = Frontend::from_env();
-    let ir = frontend
-        .compile_as(source, None)
-        .map_err(check::frontend_error)?;
-    let model = decode_model(&ir)?;
-    let pairs = select(pairs_of(&model), &args.only);
+/// The extractor for a pair, as `index_model` calls it: injected so the
+/// planning and the writing are tested without any toolchain.
+type Builder<'a> = &'a dyn Fn(&Pair, &Path, &str) -> Result<Outcome, String>;
+
+/// Index every selected pair of `model` under `manifest_dir`: the report
+/// lines, in pair order. A pair the manifest does not pin, a target it does
+/// not declare, or a root not on disk is a skip with the reason; a pair the
+/// builder indexes is written beside the manifest under its key.
+fn index_model(
+    model: &Model,
+    cfg: &manifest::Config,
+    manifest_dir: &Path,
+    only: &[(String, String)],
+    build: Builder<'_>,
+) -> Result<Vec<Line>, String> {
     let mut lines = Vec::new();
-    for pair in pairs {
+    for pair in select(pairs_of(model), only) {
         let skipped = |reason: String| Line::Skipped {
             ext: pair.ext.clone(),
             lang: pair.lang.clone(),
@@ -300,7 +295,7 @@ fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
             )));
             continue;
         };
-        let Some(root) = roots::root_for(&cfg, &manifest_dir, &pair.lang) else {
+        let Some(root) = roots::root_for(cfg, manifest_dir, &pair.lang) else {
             lines.push(skipped(format!(
                 "the manifest declares no {} target to resolve the library from",
                 pair.lang
@@ -314,7 +309,7 @@ fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
             )));
             continue;
         }
-        match build_pair(&pair, &root, version)? {
+        match build(&pair, &root, version)? {
             Outcome::Skipped(reason) => lines.push(skipped(reason)),
             Outcome::Built { symbols, note } => {
                 let key = Key {
@@ -326,7 +321,7 @@ fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
                     format: format::FORMAT,
                 };
                 let index = Index::new(key, note.clone(), symbols);
-                let path = format::index_path(&manifest_dir, &pair.ext, &pair.lang);
+                let path = format::index_path(manifest_dir, &pair.ext, &pair.lang);
                 format::write(&index, &path)?;
                 lines.push(Line::Built {
                     ext: pair.ext.clone(),
@@ -343,32 +338,63 @@ fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
     Ok(lines)
 }
 
+/// Index the pairs of `source`: the manifest above it, the source compiled
+/// by the frontend (which says which libraries it binds), every pair built
+/// by its language's extractor.
+fn index_pairs(source: &Path, args: &Args) -> Result<Vec<Line>, String> {
+    let manifest_path = check::manifest_for(source, args.config.as_deref()).ok_or_else(|| {
+        format!(
+            "no {} above {}; pass --config",
+            crate::MANIFEST_NAME,
+            source.display()
+        )
+    })?;
+    let cfg = manifest::Config::load(&manifest_path)?;
+    let manifest_dir = manifest_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let ir = Frontend::from_env()
+        .compile_as(source, None)
+        .map_err(check::frontend_error)?;
+    let model = decode_model(&ir)?;
+    index_model(&model, &cfg, &manifest_dir, &args.only, &build_pair)
+}
+
+/// What a run prints and whether it succeeded. With `json` the lines go to
+/// stdout as JSON, a failure of the run itself as an error line (the editor
+/// reads one stream); without it the text goes to stderr and a failure is
+/// the command's own error.
+fn report(outcome: Result<Vec<Line>, String>, json: bool) -> Result<(String, bool), String> {
+    if json {
+        Ok(match outcome {
+            Ok(lines) => (json_lines(&lines), true),
+            Err(message) => (json_lines(&[Line::Error { message }]), false),
+        })
+    } else {
+        outcome.map(|lines| (render_lines(&lines), true))
+    }
+}
+
 /// `tono index`: one report line per (ext, language) pair. A skipped pair is
 /// information (the editor shows why there is no completion for it), not a
-/// failure; only the command failing to run at all exits non-zero. With
-/// `--json` the lines go to stdout as JSON, an error included.
+/// failure; only the command failing to run at all exits non-zero.
 pub(crate) fn run(args: &[String]) -> Result<(), String> {
     let parsed = parse_args(args)?;
     let path = parsed
         .path
         .clone()
         .ok_or(format!("missing <file.tono>\n{USAGE}"))?;
-    let outcome = index_pairs(Path::new(&path), &parsed);
+    let (text, ok) = report(index_pairs(Path::new(&path), &parsed), parsed.json)?;
     if parsed.json {
-        let (lines, ok) = match outcome {
-            Ok(lines) => (lines, true),
-            Err(message) => (vec![Line::Error { message }], false),
-        };
-        print!("{}", json_lines(&lines));
-        if ok {
-            Ok(())
-        } else {
-            std::process::exit(1)
-        }
+        print!("{text}");
     } else {
-        let lines = outcome?;
-        eprint!("{}", render_lines(&lines));
+        eprint!("{text}");
+    }
+    if ok {
         Ok(())
+    } else {
+        std::process::exit(1)
     }
 }
 
@@ -498,6 +524,239 @@ mod tests {
                 ("lamp".into(), "rust".into(), "lamp".into()),
             ]
         );
+    }
+
+    fn model(ext_libs: &str) -> Model {
+        decode_model(&format!(
+            r#"{{"tono_ir_version":{},"modules":[{{"name":"svc","ext_libs":[{ext_libs}]}}]}}"#,
+            tono_backend::ir::TONO_IR_VERSION
+        ))
+        .unwrap()
+    }
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("tono-index-mod-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const GEARBOX: &str = r#"{"name":"gearbox","langs":[{"lang":"go","path":"example.test/gearbox"},{"lang":"ts","path":"@example/gearbox"},{"lang":"rust","path":"gearbox"}]}"#;
+
+    fn sample_symbols() -> Vec<Symbol> {
+        vec![Symbol {
+            name: "Open".into(),
+            kind: SymbolKind::Function,
+            signatures: vec!["func()".into()],
+            doc: String::new(),
+            members: vec![],
+        }]
+    }
+
+    #[test]
+    fn a_pair_is_skipped_before_the_builder_runs_when_the_project_cannot_place_it() {
+        let dir = tmp("plan");
+        std::fs::create_dir_all(dir.join("sdk/go")).unwrap();
+        // go: pinned, target declared, root present; ts: pinned but no
+        // target; rust: target declared but not pinned, and no root either.
+        let cfg = manifest::Config::from_toml_str(
+            "[project]\nname = \"svc\"\n[target.go]\nout = \"sdk/go\"\n[target.rust]\nout = \"sdk/rust\"\n[ext.gearbox]\ngo = \"v0.0.0\"\nts = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let build = |p: &Pair, root: &Path, version: &str| {
+            calls
+                .borrow_mut()
+                .push((p.lang.clone(), root.to_path_buf(), version.to_string()));
+            Ok(Outcome::Skipped("nothing here".into()))
+        };
+        let lines = index_model(&model(GEARBOX), &cfg, &dir, &[], &build).unwrap();
+        let reasons: Vec<String> = lines
+            .iter()
+            .map(|l| match l {
+                Line::Skipped { lang, reason, .. } => format!("{lang}: {reason}"),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(reasons[0], "go: nothing here");
+        assert_eq!(
+            reasons[1],
+            "ts: the manifest declares no ts target to resolve the library from"
+        );
+        assert_eq!(
+            reasons[2],
+            "rust: no rust version pinned in [ext.gearbox] of tono.toml"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[("go".to_string(), dir.join("sdk/go"), "v0.0.0".to_string())]
+        );
+        // A root the manifest names but that is not on disk.
+        let cfg = manifest::Config::from_toml_str(
+            "[project]\nname = \"svc\"\n[target.typescript]\nout = \"sdk/ts\"\n[ext.gearbox]\nts = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let lines = index_model(
+            &model(GEARBOX),
+            &cfg,
+            &dir,
+            &[("gearbox".into(), "ts".into())],
+            &build,
+        )
+        .unwrap();
+        assert_eq!(lines.len(), 1);
+        match &lines[0] {
+            Line::Skipped { reason, .. } => {
+                assert!(
+                    reason.contains("does not exist (run tono gen first)"),
+                    "{reason}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_built_pair_is_written_under_its_key_and_reported() {
+        let dir = tmp("built");
+        std::fs::create_dir_all(dir.join("sdk/go")).unwrap();
+        std::fs::write(dir.join("sdk/go/go.mod"), "module example.test/consumer\n").unwrap();
+        std::fs::write(dir.join("sdk/go/go.sum"), "foobar").unwrap();
+        let cfg = manifest::Config::from_toml_str(
+            "[project]\nname = \"svc\"\n[target.go]\nout = \"sdk/go\"\n[ext.gearbox]\ngo = \"v0.0.0\"\n",
+        )
+        .unwrap();
+        let build = |_: &Pair, _: &Path, _: &str| {
+            Ok(Outcome::Built {
+                symbols: sample_symbols(),
+                note: Some("a note".into()),
+            })
+        };
+        let lines = index_model(
+            &model(GEARBOX),
+            &cfg,
+            &dir,
+            &[("gearbox".into(), "go".into())],
+            &build,
+        )
+        .unwrap();
+        let path = format::index_path(&dir, "gearbox", "go");
+        assert_eq!(
+            lines,
+            vec![Line::Built {
+                ext: "gearbox".into(),
+                lang: "go".into(),
+                package: "example.test/gearbox".into(),
+                version: "v0.0.0".into(),
+                path: path.to_string_lossy().into_owned(),
+                symbols: 1,
+                note: Some("a note".into()),
+            }]
+        );
+        let index = format::read(&path).unwrap();
+        assert_eq!(index.key.package, "example.test/gearbox");
+        assert_eq!(index.key.version, "v0.0.0");
+        assert!(index.key.lockfile.path.ends_with("sdk/go/go.sum"));
+        assert_eq!(index.key.lockfile.digest, "85944171f73967e8");
+        assert_eq!(index.symbols, sample_symbols());
+        // A builder that fails is the run failing, not a skip.
+        let failing = |_: &Pair, _: &Path, _: &str| Err("helper crashed".to_string());
+        let err = index_model(&model(GEARBOX), &cfg, &dir, &[], &failing).unwrap_err();
+        assert_eq!(err, "helper crashed");
+    }
+
+    #[test]
+    fn the_report_is_json_on_stdout_or_text_on_stderr() {
+        let lines = vec![Line::Skipped {
+            ext: "g".into(),
+            lang: "go".into(),
+            reason: "r".into(),
+        }];
+        assert_eq!(
+            report(Ok(lines.clone()), true).unwrap(),
+            (json_lines(&lines), true)
+        );
+        assert_eq!(
+            report(Ok(lines.clone()), false).unwrap(),
+            ("skipped: g/go: r\n".to_string(), true)
+        );
+        let (text, ok) = report(Err("boom".into()), true).unwrap();
+        assert_eq!(text, "{\"kind\":\"error\",\"message\":\"boom\"}\n");
+        assert!(!ok);
+        assert_eq!(report(Err("boom".into()), false).unwrap_err(), "boom");
+    }
+
+    #[test]
+    fn run_helper_tells_a_missing_program_from_a_failing_one() {
+        let dir = tmp("helper");
+        match run_helper("tono-no-such-helper-xyz", &[], &dir, "not installed").unwrap() {
+            Outcome::Skipped(reason) => assert_eq!(reason, "not installed"),
+            other => panic!("{other:?}"),
+        }
+        let err = run_helper(
+            "sh",
+            &[
+                "-c",
+                "echo not json; echo first >&2; echo last line >&2; exit 3",
+            ],
+            &dir,
+            "not installed",
+        )
+        .unwrap_err();
+        assert_eq!(err, "sh extractor: last line");
+        let err = run_helper("sh", &["-c", "exit 1"], &dir, "not installed").unwrap_err();
+        assert_eq!(err, "sh extractor: printed no report");
+        match run_helper("sh", &["-c", "echo '{\"skipped\":\"why\"}'"], &dir, "x").unwrap() {
+            Outcome::Skipped(reason) => assert_eq!(reason, "why"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_pair_dispatches_by_language_and_refuses_an_unknown_one() {
+        let dir = tmp("dispatch");
+        let pair = |lang: &str| Pair {
+            ext: "gearbox".into(),
+            lang: lang.into(),
+            package: "gearbox".into(),
+        };
+        let skip = |lang: &str| match build_pair(&pair(lang), &dir, "0.0.0").unwrap() {
+            Outcome::Skipped(reason) => reason,
+            other => panic!("{other:?}"),
+        };
+        assert!(skip("go").contains("no go.mod above"));
+        assert!(skip("ts").contains("no TypeScript compiler API"));
+        assert!(skip("rust").contains("no Cargo.toml"));
+        assert_eq!(skip("zig"), "no zig extractor yet");
+    }
+
+    #[test]
+    fn index_pairs_needs_a_manifest_and_the_frontend() {
+        let dir = tmp("pairs");
+        let source = dir.join("svc.tono");
+        std::fs::write(
+            &source,
+            "ext gearbox {\n  go { #(example.test/gearbox) }\n}\n",
+        )
+        .unwrap();
+        let err = index_pairs(&source, &Args::default()).unwrap_err();
+        assert!(err.contains("no tono.toml above"), "{err}");
+        std::fs::write(dir.join("tono.toml"), "[project]\nname = \"svc\"\n").unwrap();
+        // With the frontend built this indexes (nothing to build: no
+        // target); without it the frontend's absence is the error.
+        match index_pairs(&source, &Args::default()) {
+            Ok(lines) => assert!(matches!(lines[0], Line::Skipped { .. }), "{lines:?}"),
+            Err(err) => assert!(
+                err.contains("could not run") || err.contains("frontend"),
+                "{err}"
+            ),
+        }
+        // The command itself: a missing file argument, and a text run that
+        // fails before printing.
+        assert!(run(&[]).unwrap_err().contains("missing <file.tono>"));
+        let err = run(&["/nonexistent-tono-project/x.tono".to_string()]).unwrap_err();
+        assert!(err.contains("no tono.toml above"), "{err}");
     }
 
     #[test]
