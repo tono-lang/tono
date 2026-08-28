@@ -6,7 +6,10 @@ open Tono_frontend
    rules that keep them honest: a block fits its struct (TC0092, TC0095,
    TC0097), a target the ext declares no module path for is named (TC0081),
    @async names only a target with an asynchronous call (TC0093), @errors
-   resolves (TC0077), and no other trait applies to an ext op (TC0096). *)
+   resolves (TC0077), and no other trait applies to an ext op (TC0096). A
+   wire struct's block has no head and declares the target's per-field
+   tags (TC0100 for a head where none belongs, none where one is required,
+   or no entry at all). *)
 
 let parse_and_check src =
   let file, parse_diags = Parser.parse src in
@@ -58,6 +61,13 @@ pub struct invalid_expression {
   go { #(ErrParse)  message: #(Error()) }
   rust { #(Error::Parse)  message: #(to_string()) }
 }
+
+pub struct calibration {
+  scale: float
+  offset: float
+
+  go { scale: #(env:"CALC_{profile}_SCALE") }
+}
 |}
 
 let clean () =
@@ -75,10 +85,14 @@ let handle_storage_type_per_target () =
     "whole storage type, per language" true
     (calc.Ir.opq_langs
     = [
-        { Ir.fl_lang = "go"; fl_head = "Calculator[float64]"; fl_fields = [] };
+        {
+          Ir.fl_lang = "go";
+          fl_head = Some "Calculator[float64]";
+          fl_fields = [];
+        };
         {
           Ir.fl_lang = "rust";
-          fl_head = "Box<dyn Calculator<f64>>";
+          fl_head = Some "Box<dyn Calculator<f64>>";
           fl_fields = [];
         };
       ])
@@ -92,7 +106,7 @@ let foreign_form_type_and_field_spelling () =
     = [
         {
           Ir.fl_lang = "rust";
-          fl_head = "FormulaOptions";
+          fl_head = Some "FormulaOptions";
           fl_fields = [ ("precision", "Option<u8>") ];
         };
       ])
@@ -119,7 +133,7 @@ let error_struct_carries_its_recognition () =
         (dec go
         = {
             Ir.fl_lang = "go";
-            fl_head = "ErrParse";
+            fl_head = Some "ErrParse";
             fl_fields = [ ("message", "Error()") ];
           });
       Alcotest.(check bool)
@@ -127,10 +141,36 @@ let error_struct_carries_its_recognition () =
         (dec rust
         = {
             Ir.fl_lang = "rust";
-            fl_head = "Error::Parse";
+            fl_head = Some "Error::Parse";
             fl_fields = [ ("message", "to_string()") ];
           })
   | _ -> Alcotest.fail "expected two language blocks"
+
+(* A wire struct's block: no head, and each entry is the field's Go struct
+   tag, verbatim; the field without an entry has none. *)
+let wire_struct_carries_its_tags () =
+  let _, m = clean () in
+  let cal =
+    List.find (fun (s : Ir.shape) -> s.Ir.id = "m#calibration") m.Ir.shapes
+  in
+  let foreign =
+    List.find (fun (t : Ir.trait) -> t.Ir.trait_id = "foreign") cal.Ir.traits
+  in
+  match foreign.Ir.value with
+  | `List [ (`Assoc kvs as go) ] ->
+      Alcotest.(check bool)
+        "no name key without a head" false
+        (List.mem_assoc "name" kvs);
+      Alcotest.(check bool)
+        "go tags, verbatim" true
+        (Ir_json_extern.decode_foreign_lang go
+        = Ok
+            {
+              Ir.fl_lang = "go";
+              fl_head = None;
+              fl_fields = [ ("scale", "env:\"CALC_{profile}_SCALE\"") ];
+            })
+  | _ -> Alcotest.fail "expected one language block"
 
 let op_lists_its_errors_in_order () =
   let _, m = clean () in
@@ -181,10 +221,84 @@ let keyed_entry_names_no_field () =
     "TC0097" true
     (has "TC0097" (ext_with "  struct f { a: string  go { #(A) b: #(B) } }"))
 
-let block_on_a_plain_struct () =
+let tagged wire = "pub struct note { id: string  " ^ wire ^ " }"
+
+let head_on_a_wire_struct () =
   Alcotest.(check bool)
-    "TC0092" true
-    (has "TC0092" "pub struct note { id: string  go { #(Note) } }")
+    "TC0100: head alone" true
+    (has "TC0100" (tagged "go { #(Note) }"));
+  Alcotest.(check bool)
+    "TC0100: head before the tags" true
+    (has "TC0100" (tagged "go { #(Note)  id: #(env:\"ID\") }"));
+  Alcotest.(check bool)
+    "no TC0092 on a wire struct" false
+    (has "TC0092" (tagged "go { #(Note) }"))
+
+let tags_on_a_wire_struct_are_fine () =
+  let _, _, _, tc = parse_and_check (tagged "go { id: #(env:\"ID\") }") in
+  Alcotest.(check (list string))
+    "clean" []
+    (List.map (fun (d : Diagnostic.t) -> d.message) tc)
+
+let empty_block_on_a_wire_struct () =
+  Alcotest.(check bool) "TC0100" true (has "TC0100" (tagged "go {}"))
+
+let tags_only_go_reads () =
+  Alcotest.(check bool)
+    "rust: TC0095" true
+    (has "TC0095" (tagged "rust { id: #(serde(rename = \"id\")) }"));
+  Alcotest.(check bool)
+    "ts: TC0095" true
+    (has "TC0095" (tagged "ts { id: #(x) }"));
+  Alcotest.(check bool)
+    "go is the one" false
+    (has "TC0095" (tagged "go { id: #(env:\"ID\") }"))
+
+let duplicate_tag_entry () =
+  Alcotest.(check bool)
+    "TC0097" true
+    (has "TC0097" (tagged "go { id: #(env:\"A\")  id: #(env:\"B\") }"))
+
+let block_on_an_entry_or_config () =
+  Alcotest.(check bool)
+    "config: TC0092" true
+    (has "TC0092"
+       "pub struct client { id: string @arg  go { id: #(env:\"ID\") } }");
+  Alcotest.(check bool)
+    "entry: TC0092" true
+    (has "TC0092"
+       "pub struct client { id: string  go { id: #(env:\"ID\") }  op f(): \
+        string }")
+
+let error_struct_without_a_head () =
+  Alcotest.(check bool)
+    "TC0100" true
+    (has "TC0100"
+       "@status(404)\n\
+        pub struct missing { message: string  go { message: #(Error()) } }")
+
+let ext_struct_without_a_head () =
+  Alcotest.(check bool)
+    "handle: TC0100" true
+    (has "TC0100" (ext_with "  struct h { go {} }"));
+  Alcotest.(check bool)
+    "form: TC0100" true
+    (has "TC0100" (ext_with "  struct f { a: string  go { a: #(A) } }"))
+
+let ext_header_without_a_path () =
+  let _, diags = Parser.parse "ext x {\n  go {}\n}" in
+  Alcotest.(check bool)
+    "a parse diagnostic naming the module path" true
+    (List.exists
+       (fun (d : Diagnostic.t) ->
+         let n = String.length "module path" in
+         let m = d.message in
+         let rec find i =
+           i + n <= String.length m
+           && (String.sub m i n = "module path" || find (i + 1))
+         in
+         find 0)
+       diags)
 
 let block_on_an_error_struct_is_fine () =
   let src =
@@ -270,6 +384,8 @@ let () =
             foreign_form_type_and_field_spelling;
           Alcotest.test_case "error struct carries its recognition" `Quick
             error_struct_carries_its_recognition;
+          Alcotest.test_case "wire struct carries its tags" `Quick
+            wire_struct_carries_its_tags;
           Alcotest.test_case "op lists its errors" `Quick
             op_lists_its_errors_in_order;
           Alcotest.test_case "prints idempotently" `Quick prints_idempotently;
@@ -285,8 +401,22 @@ let () =
             keyed_entry_on_a_handle;
           Alcotest.test_case "keyed entry names no field" `Quick
             keyed_entry_names_no_field;
-          Alcotest.test_case "block on a plain struct" `Quick
-            block_on_a_plain_struct;
+          Alcotest.test_case "head on a wire struct" `Quick
+            head_on_a_wire_struct;
+          Alcotest.test_case "tags on a wire struct" `Quick
+            tags_on_a_wire_struct_are_fine;
+          Alcotest.test_case "empty block on a wire struct" `Quick
+            empty_block_on_a_wire_struct;
+          Alcotest.test_case "only go reads a tag" `Quick tags_only_go_reads;
+          Alcotest.test_case "duplicate tag entry" `Quick duplicate_tag_entry;
+          Alcotest.test_case "block on an entry or config" `Quick
+            block_on_an_entry_or_config;
+          Alcotest.test_case "error struct without a head" `Quick
+            error_struct_without_a_head;
+          Alcotest.test_case "ext struct without a head" `Quick
+            ext_struct_without_a_head;
+          Alcotest.test_case "ext header without a path" `Quick
+            ext_header_without_a_path;
           Alcotest.test_case "block on an error struct" `Quick
             block_on_an_error_struct_is_fine;
           Alcotest.test_case "async on go" `Quick async_on_go_rejected;

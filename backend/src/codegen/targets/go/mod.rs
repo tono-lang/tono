@@ -13,6 +13,7 @@ pub mod emit;
 pub mod entry;
 pub mod errors;
 pub mod render;
+pub mod struct_tags;
 pub mod symbols;
 pub mod types;
 

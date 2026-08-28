@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 50
 expression: "render_sdk(matrix_module(), TargetKind::Go, None)"
 ---
 // ==== go/models/types.go ====
@@ -90,7 +89,8 @@ func ValidateCardData(value CardData) error {
 }
 
 type BankData struct {
-	Iban string `json:"iban"`
+	Iban string `json:"iban" env:"BANK_{account}_IBAN"`
+	Branch *string `json:"branch,omitempty"`
 }
 
 type PaymentDeclined struct {

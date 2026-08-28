@@ -408,11 +408,11 @@ fn bus_lib_with_send_bound_for(langs: &[&str]) -> ExtLib {
                 .into_iter()
                 .map(|l| crate::ir::ForeignLang {
                     lang: l.into(),
-                    name: if l == "go" {
+                    name: Some(if l == "go" {
                         "*Handle".into()
                     } else {
                         "Handle".into()
-                    },
+                    }),
                     fields: Default::default(),
                 })
                 .collect(),
@@ -510,11 +510,11 @@ fn ext_lib_with_handle_constructor(lib: &str, handle: &str, ctor: &str) -> ExtLi
                 .into_iter()
                 .map(|l| crate::ir::ForeignLang {
                     lang: l.into(),
-                    name: if l == "go" {
+                    name: Some(if l == "go" {
                         "*Handle".into()
                     } else {
                         "Handle".into()
-                    },
+                    }),
                     fields: Default::default(),
                 })
                 .collect(),
@@ -662,7 +662,7 @@ fn an_injected_handle_nested_in_a_ctor_argument_is_still_refused() {
             }],
             langs: vec![crate::ir::ForeignLang {
                 lang: "go".into(),
-                name: "Opts".into(),
+                name: Some("Opts".into()),
                 fields: Default::default(),
             }],
         });

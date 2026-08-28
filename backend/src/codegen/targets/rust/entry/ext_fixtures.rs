@@ -356,7 +356,7 @@ pub fn rust_ext_fixture_model() -> Model {
                 name: "publisher".into(),
                 langs: vec![ForeignLang {
                     lang: "rust".into(),
-                    name: "Publisher".into(),
+                    name: Some("Publisher".into()),
                     fields: Default::default(),
                 }],
                 methods: vec![],
@@ -365,7 +365,7 @@ pub fn rust_ext_fixture_model() -> Model {
                 name: "relay".into(),
                 langs: vec![ForeignLang {
                     lang: "rust".into(),
-                    name: "Relay".into(),
+                    name: Some("Relay".into()),
                     fields: Default::default(),
                 }],
                 methods: vec![ExternDecl {

@@ -161,8 +161,8 @@ fn probe_type(cx: &Ctx<'_>, t: &Tref) -> Result<String, String> {
             if let Some(form) = cx.lib.structs.iter().find(|s| s.name == name) {
                 let ts = ts_block(&form.langs)
                     .ok_or_else(|| format!("the struct {name} declares no ts block"))?;
-                cx.sdk_terms(&ts.name)?;
-                return Ok(cx.qualify(&ts.name));
+                cx.sdk_terms(ts.head())?;
+                return Ok(cx.qualify(ts.head()));
             }
             let head = cx.generated(id)?;
             if args.is_empty() {
@@ -246,7 +246,7 @@ fn arg_expr(
                     ts_block(&s.langs)
                         .ok_or_else(|| format!("the struct literal {} has no ts block", c.name))
                 })?;
-            cx.sdk_terms(&block.name)?;
+            cx.sdk_terms(block.head())?;
             let fields = c
                 .fields
                 .iter()
@@ -267,7 +267,7 @@ fn arg_expr(
             let name = format!("tonoA{}", prelude.len());
             prelude.push(format!(
                 "const {name}: {} = {{ {} }};",
-                cx.qualify(&block.name),
+                cx.qualify(block.head()),
                 fields.join(", ")
             ));
             // A spelled literal crosses here exactly as the emitted call
@@ -276,7 +276,7 @@ fn arg_expr(
                 None => Ok(name),
                 Some(spelling) => {
                     cx.sdk_terms(spelling)?;
-                    super::ext_coerce::form_coerce(&block.name, spelling, &name)
+                    super::ext_coerce::form_coerce(block.head(), spelling, &name)
                 }
             }
         }
@@ -428,7 +428,7 @@ pub fn probe(module: &Module, lib: &ExtLib, sdk: &Sdk) -> Probe {
             continue;
         };
         let key = SiteKey::form(&form.name);
-        if let Err(why) = cx.sdk_terms(&ts.name) {
+        if let Err(why) = cx.sdk_terms(ts.head()) {
             probe.skip(&key, &why);
             continue;
         }
@@ -444,7 +444,7 @@ pub fn probe(module: &Module, lib: &ExtLib, sdk: &Sdk) -> Probe {
             format!(
                 "function tonoForm_{}(tonoForm: {}): void {{ {} }}",
                 form.name,
-                cx.qualify(&ts.name),
+                cx.qualify(ts.head()),
                 reads.join(" ")
             ),
         ));

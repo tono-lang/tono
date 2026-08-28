@@ -50,11 +50,11 @@ fn lib_with_handle_method() -> ExtLib {
                 .into_iter()
                 .map(|l| crate::ir::ForeignLang {
                     lang: l.into(),
-                    name: if l == "go" {
+                    name: Some(if l == "go" {
                         "*Handle".into()
                     } else {
                         "Handle".into()
-                    },
+                    }),
                     fields: Default::default(),
                 })
                 .collect(),

@@ -109,7 +109,7 @@ fn foreign_handle_is_none_when_the_lib_declares_no_such_type() {
 fn storage(lang: &str, name: &str) -> ForeignLang {
     ForeignLang {
         lang: lang.into(),
-        name: name.into(),
+        name: Some(name.into()),
         fields: Default::default(),
     }
 }

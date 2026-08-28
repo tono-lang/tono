@@ -65,12 +65,12 @@ fn keepkit() -> ExtLib {
             langs: vec![
                 ForeignLang {
                     lang: "go".into(),
-                    name: "*Store[string]".into(),
+                    name: Some("*Store[string]".into()),
                     fields: Default::default(),
                 },
                 ForeignLang {
                     lang: "rust".into(),
-                    name: "Vault<String>".into(),
+                    name: Some("Vault<String>".into()),
                     fields: Default::default(),
                 },
             ],

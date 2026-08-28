@@ -189,9 +189,12 @@ let missing_foreign_lang_lang () =
   foreign_lang_decodes ~name:"foreign lang missing lang"
     (without "lang" foreign_lang)
 
+(* A block without "name" is a wire struct's block (field tags only), so
+   it decodes headless rather than failing. *)
 let missing_foreign_lang_name () =
-  foreign_lang_decodes ~name:"foreign lang missing name"
-    (without "name" foreign_lang)
+  match Ir_json_extern.decode_foreign_lang (without "name" foreign_lang) with
+  | Ok l -> Alcotest.(check bool) "headless" true (l.Ir.fl_head = None)
+  | Error e -> Alcotest.fail e
 
 let missing_extern_lang_lang () =
   let bad = without "lang" extern_lang in

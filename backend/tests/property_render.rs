@@ -90,6 +90,7 @@ fn field() -> impl Strategy<Value = Field> {
         option::of(doc()),
     )
         .prop_map(|(name, ty, nullable, wire, deprecated, doc)| Field {
+            tag: None,
             name,
             ty,
             nullable,
@@ -104,6 +105,7 @@ fn field() -> impl Strategy<Value = Field> {
 // the emitters' reachable domain.
 fn param() -> impl Strategy<Value = Field> {
     (field_symbol(), type_expr(), any::<bool>()).prop_map(|(name, ty, nullable)| Field {
+        tag: None,
         name,
         ty,
         nullable,

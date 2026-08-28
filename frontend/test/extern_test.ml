@@ -110,7 +110,11 @@ ext companyauth {
   }
 }
 
-struct app_config { endpoint: string, token: string }
+struct app_config {
+  endpoint: string, token: string
+
+  go { endpoint: #(env:"APP_{service}_ENDPOINT") }
+}
 struct note_ref   { id: string }
 
 pub struct note { id: string, body: string }

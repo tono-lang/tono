@@ -46,6 +46,28 @@ pub fn reference(id: &str) -> Tref {
     }
 }
 
+/// A wire struct's headless `go` block: the Go struct tag each named field
+/// carries, verbatim, after the `json` tag the emitter derives. Only the Go
+/// target reads it; the other two harnesses prove they leave it alone.
+pub fn go_tags(tags: &[(&str, &str)]) -> Trait {
+    Trait {
+        id: "foreign".into(),
+        value: serde_json::json!([{
+            "lang": "go",
+            "fields": tags
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), serde_json::json!(v)))
+                .collect::<serde_json::Map<String, serde_json::Value>>(),
+        }]),
+    }
+}
+
+/// A shape with one more trait in its bag.
+pub fn tagged(mut shape: Shape, trait_: Trait) -> Shape {
+    shape.traits.push(trait_);
+    shape
+}
+
 /// A structure shape with the given members.
 pub fn structure(id: &str, members: Vec<Member>) -> Shape {
     Shape {
@@ -159,9 +181,17 @@ pub fn matrix_module() -> Module {
                     }],
                 )],
             ),
-            structure(
-                "models#bank_data",
-                vec![member("iban", Tref::Prim(Prim::String), true, vec![])],
+            // The pair a declared Go tag makes: `iban` carries the derived
+            // `json` tag plus the declared one, `branch` only the derived one.
+            tagged(
+                structure(
+                    "models#bank_data",
+                    vec![
+                        member("iban", Tref::Prim(Prim::String), true, vec![]),
+                        member("branch", Tref::Prim(Prim::String), false, vec![]),
+                    ],
+                ),
+                go_tags(&[("iban", r#"env:"BANK_{account}_IBAN""#)]),
             ),
             declared_error(
                 "models#payment_declined",

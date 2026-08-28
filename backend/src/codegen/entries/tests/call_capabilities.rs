@@ -108,7 +108,7 @@ fn ts_handle(name: &str, class: &str) -> crate::ir::OpaqueType {
         name: name.into(),
         langs: vec![crate::ir::ForeignLang {
             lang: "ts".into(),
-            name: class.into(),
+            name: Some(class.into()),
             fields: Default::default(),
         }],
         methods: vec![],

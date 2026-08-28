@@ -303,6 +303,7 @@ mod tests {
 
     fn field(name: &str, ty: TypeExpr) -> Field {
         Field {
+            tag: None,
             name: Symbol::builtin(name),
             ty,
             nullable: false,
@@ -641,6 +642,7 @@ mod proptests {
                 .iter()
                 .enumerate()
                 .map(|(i, (m, n))| Field {
+                    tag: None,
                     name: Symbol::builtin(format!("f{i}")),
                     ty: TypeExpr::Ref(Symbol::imported(n, m, n)),
                     nullable: false,

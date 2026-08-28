@@ -7,6 +7,7 @@ use crate::codegen::tree::{Alias, Function, Interface, Method, Raw, UnionDecl};
 
 fn field(name: &str, ty: TypeExpr, nullable: bool, wire: &str) -> Field {
     Field {
+        tag: None,
         name: Symbol::builtin(name),
         ty,
         nullable,
@@ -80,6 +81,43 @@ fn imports_render_as_go_import_lines() {
     assert_eq!(
         rules.render_imports(vec!["\"fmt\"".into()]),
         "import \"fmt\""
+    );
+}
+
+/// The declared tag follows the derived `json` tag inside the same backtick
+/// string, verbatim; a field without one renders exactly as before.
+#[test]
+fn a_declared_tag_follows_the_json_tag() {
+    let mut tagged = field(
+        "Scale",
+        TypeExpr::Ref(Symbol::builtin("float64")),
+        false,
+        "scale",
+    );
+    tagged.tag = Some("env:\"CALC_{profile}_SCALE\"".into());
+    let decl = Decl::Interface(Interface {
+        name: Symbol::builtin("Calibration"),
+        params: vec![],
+        fields: vec![
+            tagged,
+            field(
+                "Offset",
+                TypeExpr::Ref(Symbol::builtin("float64")),
+                false,
+                "offset",
+            ),
+        ],
+        deprecated: None,
+        doc: None,
+    });
+    let out = GoRules::default().render_decl(&decl);
+    assert!(
+        out.contains("\tScale float64 `json:\"scale\" env:\"CALC_{profile}_SCALE\"`\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\tOffset float64 `json:\"offset\"`\n"),
+        "{out}"
     );
 }
 
@@ -182,6 +220,7 @@ fn a_field_without_a_wire_override_tags_with_its_name() {
         name: Symbol::builtin("Charge"),
         params: vec![],
         fields: vec![Field {
+            tag: None,
             name: Symbol::builtin("Id"),
             ty: TypeExpr::Ref(Symbol::builtin("string")),
             nullable: false,
@@ -254,6 +293,7 @@ fn a_deprecated_struct_field_and_enum_carry_godoc_comments() {
         name: Symbol::builtin("Charge"),
         params: vec![],
         fields: vec![Field {
+            tag: None,
             name: Symbol::builtin("Amount"),
             ty: TypeExpr::Ref(Symbol::builtin("uint64")),
             nullable: false,
@@ -289,6 +329,7 @@ fn doc_renders_as_flattened_godoc_on_the_struct_field_and_enum_member() {
         name: Symbol::builtin("Charge"),
         params: vec![],
         fields: vec![Field {
+            tag: None,
             name: Symbol::builtin("Amount"),
             ty: TypeExpr::Ref(Symbol::builtin("int64")),
             nullable: false,

@@ -252,12 +252,16 @@ Every string that is not a tono name is a foreign spelling, the text of a
 ```
 
 - A `foreign_lang` is one language's block on a struct:
-  `{"lang", "name", "fields"?}`. `name` is the positional first element of
+  `{"lang", "name"?, "fields"?}`. `name` is the positional first element of
   the block and what it is depends on the struct: a foreign form's type, an
   opaque handle's whole storage type, an error struct's sentinel or error
-  type. `fields` (omitted when empty) pairs a tono field name with its
-  foreign spelling: the field's foreign type on a form, where the field
-  comes from on an error value (`"message": "Error()"`).
+  type. It is omitted on a wire struct's block, which names nothing
+  foreign: there `fields` is the target's own per-field declaration, a Go
+  struct tag kept verbatim (`"endpoint": "env:\"ENDPOINT\""`), appended by
+  the Go emitter after the `json` tag it derives. On the other blocks
+  `fields` (omitted when empty) pairs a tono field name with its foreign
+  spelling: the field's foreign type on a form, where the field comes from
+  on an error value (`"message": "Error()"`).
 - `structs` are foreign forms declared inside the block, field names/casing
   kept verbatim (never normalized); never a top-level shape, never role-
   classified, never crosses the wire. Each carries its `langs`; a target

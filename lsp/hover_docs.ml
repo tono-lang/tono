@@ -313,7 +313,10 @@ let construct_docs : (string * string) list =
        type (go { #(Calculator[float64]) }, rust { #(Box<dyn Calculator<f64>>) \
        }). An error struct takes language blocks too: the sentinel or error \
        type a target recognizes, and where each field comes from (go { \
-       #(ErrParse) message: #(Error()) })." );
+       #(ErrParse) message: #(Error()) }). A wire struct's go block has no \
+       head and declares a field's Go struct tag, verbatim, appended to the \
+       json tag the emitter derives (go { endpoint: #(env:\"ENDPOINT\") }): \
+       what a library reading the generated type by reflection expects." );
     ( "enum",
       "An open enumeration: strict on encode, lenient on decode (an unknown \
        value is carried, never a failure)." );

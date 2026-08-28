@@ -40,7 +40,7 @@ fn handle_lib(lib: &str, ty: &str) -> ExtLib {
             name: ty.into(),
             langs: vec![crate::ir::ForeignLang {
                 lang: "rust".into(),
-                name: pascal(ty),
+                name: Some(pascal(ty)),
                 fields: Default::default(),
             }],
             methods: vec![],
@@ -259,7 +259,7 @@ fn a_render_of_the_full_fixture_is_stable_prose() {
 fn storage(lang: &str, name: &str) -> crate::ir::ForeignLang {
     crate::ir::ForeignLang {
         lang: lang.into(),
-        name: name.into(),
+        name: Some(name.into()),
         fields: Default::default(),
     }
 }
@@ -483,7 +483,7 @@ pub(super) fn handle_call_model(
             fields: vec![],
             langs: vec![crate::ir::ForeignLang {
                 lang: "rust".into(),
-                name: "Opts".into(),
+                name: Some("Opts".into()),
                 fields: Default::default(),
             }],
         }],
@@ -491,7 +491,7 @@ pub(super) fn handle_call_model(
             name: "h".into(),
             langs: vec![crate::ir::ForeignLang {
                 lang: "rust".into(),
-                name: "H".into(),
+                name: Some("H".into()),
                 fields: Default::default(),
             }],
             methods: vec![ExternDecl {

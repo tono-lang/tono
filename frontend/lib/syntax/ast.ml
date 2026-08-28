@@ -235,13 +235,16 @@ type foreign_field = {
    #(Option<u8>) }]. The first element is positional and names the foreign
    thing; what it is depends on the struct: the foreign type of a foreign
    form, the whole storage type of an opaque handle, the sentinel (or error
-   type) of an error struct. The keyed entries name a tono field and give
-   its foreign spelling (a field type, or where the field comes from on an
-   error value). *)
+   type) of an error struct. A wire struct's block has no head (nothing
+   foreign to name) and its keyed entries are the target's own per-field
+   declaration, a Go struct tag: [go { endpoint: #(env:"ENDPOINT") }]. The
+   keyed entries name a tono field and give its foreign spelling (a field
+   type, where the field comes from on an error value, a struct tag).
+   [lb_head_span] is the opening brace when there is no head. *)
 type lang_block = {
   lb_lang : string;
   lb_lang_span : Span.span;
-  lb_head : string;
+  lb_head : string option;
   lb_head_span : Span.span;
   lb_fields : (string * Span.span * string * Span.span) list;
   lb_span : Span.span;

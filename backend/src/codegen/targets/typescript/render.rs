@@ -225,6 +225,7 @@ mod tests {
 
     fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
         Field {
+            tag: None,
             name: Symbol::builtin(name),
             ty,
             nullable,
@@ -303,6 +304,7 @@ mod tests {
             name: Symbol::builtin("Charge"),
             params: vec![],
             fields: vec![Field {
+                tag: None,
                 name: Symbol::builtin("amount"),
                 ty: TypeExpr::Ref(Symbol::builtin("number")),
                 nullable: false,
@@ -348,6 +350,7 @@ mod tests {
             name: Symbol::builtin("Charge"),
             params: vec![],
             fields: vec![Field {
+                tag: None,
                 name: Symbol::builtin("amount"),
                 ty: TypeExpr::Ref(Symbol::builtin("number")),
                 nullable: false,

@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 55
 expression: "render_sdk(matrix_module(), TargetKind::TypeScript, None)"
 ---
 // ==== typescript/number.ts ====
@@ -117,6 +116,7 @@ export function validateCardData(value: CardData): ValidationError | null {
 
 export interface BankData {
   iban: string;
+  branch?: string | null;
 }
 
 export interface PaymentDeclined {
@@ -259,12 +259,14 @@ export function decodeCardData(raw: any): CardData {
 export function encodeBankData(value: BankData): unknown {
   return {
     iban: value.iban,
+    branch: value.branch == null ? undefined : value.branch,
   };
 }
 
 export function decodeBankData(raw: any): BankData {
   return {
     iban: raw.iban,
+    branch: raw.branch == null ? undefined : raw.branch,
   };
 }
 

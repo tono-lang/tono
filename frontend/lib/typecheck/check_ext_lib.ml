@@ -457,12 +457,36 @@ let check_extern ~(tbl : Symtab.t) ~(langs : string list)
 
 (* ── Language blocks on structs ─────────────────────────────────────────── *)
 
-(* The blocks of one struct: each language at most once, each one the ext
-   declares a module path for (or, at top level, a target at all), and
-   each keyed entry a field of the struct; a handle carries no keyed entry. *)
-let check_lang_blocks ~(allowed : string list) ~(allowed_what : string)
-    ~(fields : string list) ~(is_handle : bool) (blocks : Ast.lang_block list) :
+(* What a block's positional head must be, per struct: [Some what] when the
+   head is required ([what] says what it names: a foreign type, a storage
+   type, a sentinel), [None] on a wire struct, whose block declares field
+   tags only and has nothing foreign to name. *)
+let check_lang_block_head ~(head : string option) (b : Ast.lang_block) :
     Diagnostic.t list =
+  match (head, b.Ast.lb_head) with
+  | Some _, Some _ | None, None -> []
+  | Some what, None ->
+      [
+        err Error_codes.lang_block_shape b.Ast.lb_head_span
+          "the '%s' block names %s first: '%s { #(...) }'" b.Ast.lb_lang what
+          b.Ast.lb_lang;
+      ]
+  | None, Some _ ->
+      [
+        err Error_codes.lang_block_shape b.Ast.lb_head_span
+          "a wire struct's '%s' block declares field tags only ('field: \
+           #(tag)'); a head would name nothing"
+          b.Ast.lb_lang;
+      ]
+
+(* The blocks of one struct: each language at most once, each one the ext
+   declares a module path for (or, at top level, a target at all), the head
+   present or absent as [head] says, and each keyed entry a field of the
+   struct, once; a handle carries no keyed entry. [unknown] words the
+   diagnostic for a language outside [allowed]. *)
+let check_lang_blocks ~(allowed : string list) ~(unknown : string -> string)
+    ~(head : string option) ~(fields : string list) ~(is_handle : bool)
+    (blocks : Ast.lang_block list) : Diagnostic.t list =
   let seen = Hashtbl.create 4 in
   List.concat_map
     (fun (b : Ast.lang_block) ->
@@ -480,12 +504,11 @@ let check_lang_blocks ~(allowed : string list) ~(allowed_what : string)
         if List.mem b.Ast.lb_lang allowed then []
         else
           [
-            err Error_codes.lang_block_mismatch b.Ast.lb_lang_span
-              "%s '%s'; a language block names one of %s" allowed_what
-              b.Ast.lb_lang
-              (Ext_lib_vocab.quoted allowed);
+            err Error_codes.lang_block_mismatch b.Ast.lb_lang_span "%s"
+              (unknown b.Ast.lb_lang);
           ]
       in
+      let entries = Hashtbl.create 4 in
       let keyed =
         List.concat_map
           (fun (n, span, _, _) ->
@@ -496,48 +519,98 @@ let check_lang_blocks ~(allowed : string list) ~(allowed_what : string)
                    storage type"
                   b.Ast.lb_lang;
               ]
-            else if List.mem n fields then []
-            else
+            else if not (List.mem n fields) then
               [
                 err Error_codes.lang_block_field_unknown span
                   "'%s' is not a field of this struct" n;
-              ])
+              ]
+            else if Hashtbl.mem entries n then
+              [
+                err Error_codes.lang_block_field_unknown span
+                  "'%s' already has an entry in this '%s' block" n b.Ast.lb_lang;
+              ]
+            else (
+              Hashtbl.add entries n ();
+              []))
           b.Ast.lb_fields
       in
-      dup @ known @ keyed)
+      dup @ known @ check_lang_block_head ~head b @ keyed)
     blocks
 
-(* A top-level struct's language blocks belong to an error struct only:
-   there they say how the target recognizes the foreign error. *)
+(* The wording for a language block naming something that is not a target,
+   on a top-level struct. *)
+let not_a_target lang =
+  Printf.sprintf "no target is named '%s'; a language block names one of %s"
+    lang
+    (Ext_lib_vocab.quoted Ext_lib_vocab.targets)
+
+(* A top-level struct's language blocks belong to an error struct (how the
+   target recognizes the foreign error, and where each field comes from)
+   or to a wire struct (the target's per-field declaration: only Go reads
+   one, a struct tag, appended verbatim to the ones the emitter derives).
+   An entry or a config is neither: nothing there is a shape a target reads
+   back by reflection or matches an error against. *)
 let is_error_struct (d : Ast.decl) : bool =
   List.exists
     (fun (t : Ast.trait) ->
       match t.Ast.tname with "status" | "errorCode" -> true | _ -> false)
     d.Ast.dtraits
 
+(* The one language whose wire-struct block has a meaning today: Go, where
+   a library reads a struct tag off the generated field at run time.
+   TypeScript has no per-field attribute to declare (its equivalent forms
+   bind without one), and Rust waits for a real case rather than a guess. *)
+let tagged_targets = [ "go" ]
+
 let check_struct_lang_blocks (decls : Ast.decl list) : Diagnostic.t list =
+  let roles = Roles.classify decls in
   List.concat_map
     (fun (d : Ast.decl) ->
       match d.Ast.dkind with
       | Ast.DStruct { slangs = []; _ } -> []
-      | Ast.DStruct { members; slangs; _ } ->
-          let misplaced =
-            if is_error_struct d then []
-            else
-              List.map
-                (fun (b : Ast.lang_block) ->
-                  err Error_codes.struct_lang_block_misplaced b.Ast.lb_span
-                    "a language block on '%s' has nothing to bind: only an \
-                     error struct (@status or @errorCode) declares how a \
-                     target recognizes it"
-                    d.Ast.dname)
-                slangs
-          in
-          misplaced
-          @ check_lang_blocks ~allowed:Ext_lib_vocab.targets
-              ~allowed_what:"no target is named"
-              ~fields:(List.map (fun (m : Ast.member) -> m.Ast.mname) members)
-              ~is_handle:false slangs
+      | Ast.DStruct { members; slangs; _ } -> (
+          let fields = List.map (fun (m : Ast.member) -> m.Ast.mname) members in
+          if is_error_struct d then
+            check_lang_blocks ~allowed:Ext_lib_vocab.targets
+              ~unknown:not_a_target
+              ~head:(Some "the sentinel or error type the target recognizes")
+              ~fields ~is_handle:false slangs
+          else
+            match Hashtbl.find_opt roles d.Ast.dname with
+            | Some (Roles.Entry | Roles.Config) ->
+                List.map
+                  (fun (b : Ast.lang_block) ->
+                    err Error_codes.struct_lang_block_misplaced b.Ast.lb_span
+                      "a language block on '%s' has nothing to bind: only a \
+                       wire struct declares a target's field tags, and only an \
+                       error struct (@status or @errorCode) declares how a \
+                       target recognizes it"
+                      d.Ast.dname)
+                  slangs
+            | _ ->
+                let empty =
+                  List.concat_map
+                    (fun (b : Ast.lang_block) ->
+                      match b.Ast.lb_fields with
+                      | [] ->
+                          [
+                            err Error_codes.lang_block_shape b.Ast.lb_span
+                              "the '%s' block on '%s' declares no field tag; a \
+                               wire struct's block is 'field: #(tag)' entries"
+                              b.Ast.lb_lang d.Ast.dname;
+                          ]
+                      | _ -> [])
+                    slangs
+                in
+                empty
+                @ check_lang_blocks ~allowed:tagged_targets
+                    ~unknown:(fun lang ->
+                      Printf.sprintf
+                        "no struct tag is read by '%s'; on a wire struct a \
+                         language block names one of %s"
+                        lang
+                        (Ext_lib_vocab.quoted tagged_targets))
+                    ~head:None ~fields ~is_handle:false slangs)
       | _ -> [])
     decls
 
@@ -654,7 +727,12 @@ let check_decls ~(tbl : Symtab.t) (decls : Ast.decl list) : Diagnostic.t list =
              [Check_ext_lib_project]; here only the target set is closed. *)
           let blocks_of ~fields ~is_handle blocks =
             check_lang_blocks ~allowed:Ext_lib_vocab.targets
-              ~allowed_what:"no target is named" ~fields ~is_handle blocks
+              ~unknown:not_a_target
+              ~head:
+                (Some
+                   (if is_handle then "the whole storage type"
+                    else "the foreign type"))
+              ~fields ~is_handle blocks
           in
           List.concat_map
             (check_extern ~tbl ~langs structs ~handles ~classes)

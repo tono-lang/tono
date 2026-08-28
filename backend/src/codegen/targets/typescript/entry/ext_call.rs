@@ -466,10 +466,10 @@ pub(super) fn sentinel_switch(
         let class_name = sentinel_error_class(type_name);
         sentinel_types.insert(type_name.to_string());
         refs.push(module_symbol(&class_name, module));
-        import_spelling(&fl.name, lib, refs);
+        import_spelling(fl.head(), lib, refs);
         checks.push_str(&format!(
             "  if (e instanceof {sentinel}) {{ {t} }}\n",
-            sentinel = spell(&fl.name, module),
+            sentinel = spell(fl.head(), module),
             t = throw(format!("new {class_name}(e)")),
         ));
     }

@@ -205,7 +205,7 @@ fn cfg_method(
 fn foreign_lang(lang: &str, name: &str) -> crate::ir::ForeignLang {
     crate::ir::ForeignLang {
         lang: lang.into(),
-        name: name.into(),
+        name: Some(name.into()),
         fields: Default::default(),
     }
 }

@@ -435,7 +435,7 @@ fn call_assign_names_the_type_argument_on_a_generic_constructor() {
         name: "source".into(),
         langs: vec![crate::ir::ForeignLang {
             lang: "go".into(),
-            name: "*Source[.settings]".into(),
+            name: Some("*Source[.settings]".into()),
             fields: Default::default(),
         }],
         methods: vec![],

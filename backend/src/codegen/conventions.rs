@@ -493,6 +493,7 @@ mod tests {
         // clause and any field that applies it must both come out PascalCase (`T`),
         // so they always agree.
         let field_of = |m: &Member| Field {
+            tag: None,
             name: Symbol::builtin(m.name.clone()),
             ty: type_expr_of(&m.target, &|t: &Tref| {
                 leaf_symbol_of(t, |p| Symbol::builtin(format!("{p:?}")), "List", "Map")
@@ -646,6 +647,7 @@ mod tests {
     #[test]
     fn emit_shape_dispatches_each_shape_kind_through_its_policy() {
         let field_of = |m: &Member| Field {
+            tag: None,
             name: Symbol::builtin(m.name.clone()),
             ty: TypeExpr::Ref(Symbol::builtin("x")),
             nullable: false,

@@ -390,26 +390,28 @@ let braced_at ~(indent : string) (header : string) (lines : string list) :
   | ls -> indent ^ header ^ " {\n" ^ String.concat "\n" ls ^ "\n" ^ indent ^ "}"
 
 (* A language block on a struct (or the ext header's module path): the
-   head spelling first, then each field's spelling, on one line when short.
-   Two spaces separate the head from the fields, so the eye finds the
-   positional element before the keyed ones. *)
+   head spelling first when the block has one, then each field's spelling,
+   on one line when short. Two spaces separate the head from the fields,
+   so the eye finds the positional element before the keyed ones. *)
 let print_lang_block ~indent (b : Ast.lang_block) : string =
   let fields =
     List.map
       (fun (n, _, sp, _) -> n ^ ": " ^ foreign_spelling sp)
       b.Ast.lb_fields
   in
+  let items =
+    (match b.Ast.lb_head with Some h -> [ foreign_spelling h ] | None -> [])
+    @ fields
+  in
   let one_line =
-    indent ^ b.Ast.lb_lang ^ " { "
-    ^ String.concat "  " (foreign_spelling b.Ast.lb_head :: fields)
-    ^ " }"
+    match items with
+    | [] -> indent ^ b.Ast.lb_lang ^ " {}"
+    | _ -> indent ^ b.Ast.lb_lang ^ " { " ^ String.concat "  " items ^ " }"
   in
   if String.length one_line <= 100 then one_line
   else
     braced_at ~indent b.Ast.lb_lang
-      (List.map
-         (fun l -> indent ^ "  " ^ l)
-         (foreign_spelling b.Ast.lb_head :: fields))
+      (List.map (fun l -> indent ^ "  " ^ l) items)
 
 let print_lang_path ~indent (lp : Ast.lang_path) : string =
   indent ^ lp.Ast.lp_lang ^ " { " ^ foreign_spelling lp.Ast.lp_path ^ " }"

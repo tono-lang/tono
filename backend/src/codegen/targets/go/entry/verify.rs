@@ -112,8 +112,8 @@ fn probe_type(cx: &Ctx<'_>, t: &Tref) -> Result<String, String> {
                 let go = form
                     .lang("go")
                     .ok_or_else(|| format!("the struct {name} declares no go block"))?;
-                cx.sdk_terms(&go.name)?;
-                return Ok(cx.qualify(&go.name));
+                cx.sdk_terms(go.head())?;
+                return Ok(cx.qualify(go.head()));
             }
             let head = crate::codegen::verify::generated_shape(cx.module, cx.sdk, id)?;
             if args.is_empty() {
@@ -170,13 +170,13 @@ fn arg_expr(cx: &Ctx<'_>, params: &[ExternParam], arg: &CallArg) -> Result<Strin
                 })?
                 .lang("go")
                 .ok_or_else(|| format!("the struct literal {} has no go block", c.name))?;
-            cx.sdk_terms(&form.name)?;
+            cx.sdk_terms(form.head())?;
             let fields = c
                 .fields
                 .iter()
                 .map(|(k, v)| Ok(format!("{k}: {}", arg_expr(cx, params, v)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            let literal = format!("{}{{{}}}", cx.qualify(&form.name), fields.join(", "));
+            let literal = format!("{}{{{}}}", cx.qualify(form.head()), fields.join(", "));
             // A spelled literal crosses here exactly as the emitted call
             // passes it (`&mathkit.Options{..}`); the form itself is still
             // probed as the value type its block declares.
@@ -342,11 +342,11 @@ pub fn probe(module: &Module, lib: &ExtLib, sdk: &Sdk, package: &str) -> Probe {
             continue;
         };
         let key = SiteKey::form(&form.name);
-        if let Err(why) = cx.sdk_terms(&go.name) {
+        if let Err(why) = cx.sdk_terms(go.head()) {
             probe.skip(&key, &why);
             continue;
         }
-        let ty = cx.qualify(&go.name);
+        let ty = cx.qualify(go.head());
         let mut checks = Vec::new();
         for f in &form.fields {
             let field_ty = match go.fields.get(&f.name) {

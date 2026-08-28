@@ -108,7 +108,11 @@
    an opaque handle of the block. The wire shape ("type": name) is the same;
    a reader that only resolves handles would miss the struct, so the gate
    moves. *)
-let current_ir_version = 32
+(* v33 made a foreign_lang's "name" optional: a wire struct's language block
+   has no head, and its keyed entries are the target's per-field
+   declaration (a Go struct tag). A reader that requires "name" would
+   reject the block, so the gate moves. *)
+let current_ir_version = 33
 
 (* The scalar and entry-model codecs live in [Ir_json_base] and
    [Ir_json_entry]; re-exported here so [Ir_json] stays the single entry

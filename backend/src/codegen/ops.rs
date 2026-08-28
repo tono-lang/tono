@@ -425,6 +425,7 @@ pub fn client_decl(
                 params: input
                     .map(|t| {
                         vec![Field {
+                            tag: None,
                             name: Symbol::builtin("input"),
                             ty: type_expr_of(t),
                             nullable: false,

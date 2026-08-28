@@ -146,7 +146,7 @@ type foreign_field = {
 type lang_block = {
   lb_lang : string;
   lb_lang_span : Span.span;
-  lb_head : string;
+  lb_head : string option;
   lb_head_span : Span.span;
   lb_fields : (string * Span.span * string * Span.span) list;
   lb_span : Span.span;

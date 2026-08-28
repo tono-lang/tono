@@ -267,6 +267,7 @@ mod tests {
                     let fields = members
                         .iter()
                         .map(|m| Field {
+                            tag: None,
                             name: Symbol::builtin(m.name.clone()),
                             ty: self.type_expr_of(&m.target),
                             nullable: !m.required,
@@ -297,6 +298,7 @@ mod tests {
 
     fn imported_field(name: &str, ty_name: &str, module: &str) -> Field {
         Field {
+            tag: None,
             name: Symbol::builtin(name),
             ty: TypeExpr::Ref(Symbol::imported(ty_name, module, ty_name)),
             nullable: false,
@@ -347,6 +349,7 @@ mod tests {
             decls: vec![Decl::Function(Function {
                 name: Symbol::builtin("decodeCharge"),
                 params: vec![Field {
+                    tag: None,
                     name: Symbol::builtin("raw"),
                     ty: TypeExpr::Ref(Symbol::builtin("unknown")),
                     nullable: false,
@@ -396,6 +399,7 @@ mod tests {
                 name: Symbol::builtin("Plain"),
                 params: vec![],
                 fields: vec![Field {
+                    tag: None,
                     name: Symbol::builtin("id"),
                     ty: TypeExpr::Ref(Symbol::builtin("String")),
                     nullable: false,
@@ -421,6 +425,7 @@ mod tests {
                 name: Symbol::builtin("Charge"),
                 params: vec![],
                 fields: vec![Field {
+                    tag: None,
                     name: Symbol::builtin("amountCents"),
                     ty: TypeExpr::Ref(Symbol::builtin("i64")),
                     nullable: false,
@@ -472,6 +477,7 @@ mod tests {
                     params: vec![],
                     fields: vec![
                         Field {
+                            tag: None,
                             name: Symbol::builtin("items"),
                             ty: TypeExpr::list(TypeExpr::Ref(Symbol::imported(
                                 "Item", "catalog", "Item",
@@ -482,6 +488,7 @@ mod tests {
                             doc: None,
                         },
                         Field {
+                            tag: None,
                             name: Symbol::builtin("index"),
                             ty: TypeExpr::map(
                                 TypeExpr::Ref(Symbol::builtin("String")),
@@ -493,6 +500,7 @@ mod tests {
                             doc: None,
                         },
                         Field {
+                            tag: None,
                             name: Symbol::builtin("note"),
                             ty: TypeExpr::nullable(TypeExpr::Ref(Symbol::builtin("String"))),
                             nullable: false,
@@ -501,6 +509,7 @@ mod tests {
                             doc: None,
                         },
                         Field {
+                            tag: None,
                             name: Symbol::builtin("page"),
                             ty: TypeExpr::Generic(
                                 Symbol::imported("Page", "core", "Page"),
@@ -512,6 +521,7 @@ mod tests {
                             doc: None,
                         },
                         Field {
+                            tag: None,
                             name: Symbol::builtin("counts"),
                             ty: TypeExpr::entries(
                                 TypeExpr::Ref(Symbol::builtin("i32")),
@@ -550,6 +560,7 @@ mod tests {
                 Decl::Method(Method {
                     name: Symbol::builtin("create"),
                     params: vec![Field {
+                        tag: None,
                         name: Symbol::builtin("input"),
                         ty: TypeExpr::Ref(Symbol::builtin("String")),
                         nullable: false,

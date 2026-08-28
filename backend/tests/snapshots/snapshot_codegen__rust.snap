@@ -1,6 +1,5 @@
 ---
 source: backend/tests/snapshot_codegen.rs
-assertion_line: 45
 expression: "render_sdk(matrix_module(), TargetKind::Rust, None)"
 ---
 // ==== rust/src/number.rs ====
@@ -218,6 +217,8 @@ impl CardData {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct BankData {
     pub iban: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

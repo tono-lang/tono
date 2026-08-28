@@ -361,7 +361,7 @@ let gen_lang_path =
    printer does not care whether they resolve. *)
 let gen_lang_block ~with_fields =
   let+ lang = gen_lang
-  and+ head = gen_spelling
+  and+ head = G.option gen_spelling
   and+ fields =
     if with_fields then
       G.list_size (G.int_range 0 2)

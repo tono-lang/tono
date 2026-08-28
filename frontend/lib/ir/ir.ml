@@ -380,12 +380,15 @@ type extern_decl = {
 
 (* One language's block on a struct. [fl_head] is positional and names the
    foreign thing: a foreign form's type, an opaque handle's whole storage
-   type, an error struct's sentinel or error type. [fl_fields] pairs a tono
-   field with its foreign spelling: the field's foreign type on a form,
-   where the field comes from on an error value. *)
+   type, an error struct's sentinel or error type. It is [None] on a wire
+   struct's block, which names nothing foreign: there the keyed entries are
+   the target's own per-field declaration (a Go struct tag, verbatim).
+   [fl_fields] pairs a tono field with its foreign spelling: the field's
+   foreign type on a form, where the field comes from on an error value,
+   the struct tag on a wire struct. *)
 type foreign_lang = {
   fl_lang : string;
-  fl_head : string;
+  fl_head : string option;
   fl_fields : (string * string) list;
 }
 

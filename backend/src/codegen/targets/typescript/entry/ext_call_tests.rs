@@ -105,7 +105,7 @@ fn appendix_ext_libs() -> Vec<ExtLib> {
             name: "publisher".into(),
             langs: vec![crate::ir::ForeignLang {
                 lang: "ts".into(),
-                name: "Publisher".into(),
+                name: Some("Publisher".into()),
                 fields: Default::default(),
             }],
             methods: vec![],
@@ -542,7 +542,7 @@ fn a_class_reference_spells_the_instantiation_ts_name_verbatim() {
     let mut module = appendix_module(appendix_fields());
     module.ext_libs[1].types[0].langs = vec![crate::ir::ForeignLang {
         lang: "ts".into(),
-        name: "QueuePublisher".into(),
+        name: Some("QueuePublisher".into()),
         fields: Default::default(),
     }];
     module.ext_libs[1].externs[0].langs[0].call_args =
@@ -713,7 +713,7 @@ fn a_spelled_ctor_field_converts_inside_the_literal() {
     opts.fields[0].r#type = Tref::Prim(Prim::I64);
     opts.langs = vec![crate::ir::ForeignLang {
         lang: "ts".into(),
-        name: "TsOpts".into(),
+        name: Some("TsOpts".into()),
         fields: std::collections::BTreeMap::from([("region".to_string(), "number".to_string())]),
     }];
     let region = &mut module.ext_libs[0].externs[0];
@@ -731,7 +731,7 @@ fn a_spelled_ctor_literal_passes_structurally() {
     let mut module = appendix_module(appendix_fields());
     module.ext_libs[0].structs[0].langs = vec![crate::ir::ForeignLang {
         lang: "ts".into(),
-        name: "TsOpts".into(),
+        name: Some("TsOpts".into()),
         fields: Default::default(),
     }];
     let load = &mut module.ext_libs[0].externs[0];

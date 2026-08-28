@@ -1,0 +1,55 @@
+// Capability 23 (Go): a struct tag on a generated type. TuningFromEnv[T]
+// resolves T from the environment by reflection, reading the `env` tag of
+// each field of T at run time, and WithParam substitutes {profile} inside
+// the variable name; Tuning[T] is an interface held by value, generic over
+// the module's own struct, and TuningFallback composes handles the client
+// already built. Every binding here passed before this capability, and the
+// generated code compiled: a tag is invisible to the compiler, so the
+// defect was a Load failing at run time on a struct with no tags and
+// nowhere to declare them. The wire struct's go block declares them, one
+// per field, verbatim after the json tag, and the driver sets the
+// variables and reads the values back.
+ext mathkit {
+  go { #(tono-ext-fixture/mathkit) }
+
+  struct tuning {
+    go { #(Tuning[.calibration]) }
+
+    op load(): calibration {
+      go { call: #(Load)(#(ctx context.Context)) }
+    }
+  }
+
+  op from_env(service: string, profile: string): tuning {
+    go { call: #(TuningFromEnv[.calibration])(service, #(WithParam)("profile", profile)) }
+  }
+
+  op pinned(value: calibration): tuning {
+    go { call: #(TuningPinned[.calibration])(value) }
+  }
+
+  op fallback(tunings: []tuning): tuning {
+    go { call: #(TuningFallback[.calibration])(tunings: #(...Tuning[.calibration])) }
+  }
+}
+
+struct calibration {
+  scale: float
+  offset: float
+
+  go {
+    scale: #(env:"{service}_{profile}_SCALE")
+    offset: #(env:"{service}_{profile}_OFFSET")
+  }
+}
+
+pub struct client {
+  profile: string @arg
+  defaults: calibration @arg
+  resolved: mathkit.tuning = mathkit.from_env("CALC", .profile)
+  pinned: mathkit.tuning = mathkit.pinned(.defaults)
+  tuning: mathkit.tuning = mathkit.fallback([.resolved, .pinned])
+
+  op calibrate(): calibration
+    impl .tuning.load()
+}

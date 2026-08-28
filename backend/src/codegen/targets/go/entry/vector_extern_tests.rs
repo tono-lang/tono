@@ -282,7 +282,7 @@ fn a_ctx_marked_method_fake_takes_the_context_first() {
         name: "publisher".into(),
         langs: vec![crate::ir::ForeignLang {
             lang: "go".into(),
-            name: "*Publisher".into(),
+            name: Some("*Publisher".into()),
             fields: Default::default(),
         }],
         methods: vec![crate::ir::ExternDecl {
