@@ -30,6 +30,7 @@ fn int_values(pairs: Vec<(&str, i64)>) -> Vec<EnumValue> {
 
 fn field(name: &str, ty: TypeExpr, nullable: bool) -> Field {
     Field {
+        tag: None,
         name: Symbol::builtin(name),
         ty,
         nullable,

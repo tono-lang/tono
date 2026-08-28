@@ -48,7 +48,10 @@ pub(crate) fn of_lang(lang: &ExternLang) -> Vec<&str> {
 /// The spellings of a struct's language block: the foreign name and every
 /// spelled field.
 pub(crate) fn of_block(block: &ForeignLang) -> Vec<&str> {
-    std::iter::once(block.name.as_str())
+    block
+        .name
+        .iter()
+        .map(String::as_str)
         .chain(block.fields.values().map(String::as_str))
         .collect()
 }
@@ -102,11 +105,17 @@ pub(crate) fn of_lib(lib: &ExtLib) -> Vec<(String, &str, &str)> {
     out
 }
 
-/// The spellings of the module's error structs' `foreign` blocks.
+/// The spellings of the module's error structs' `foreign` blocks: the ones
+/// with a head. A wire struct's headless block carries the target's own
+/// field tags, verbatim text a spelling rule has no business reading (a
+/// `.` inside a tag value is the library's, never a reference).
 pub(crate) fn of_errors(module: &Module) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for shape in &module.shapes {
-        for block in ForeignLang::of_shape(shape) {
+        for block in ForeignLang::of_shape(shape)
+            .into_iter()
+            .filter(|b| b.name.is_some())
+        {
             let site = format!("error {}", super::local_name(&shape.id));
             for sp in of_block(&block) {
                 out.push((site.clone(), block.lang.clone(), sp.to_string()));
@@ -229,7 +238,7 @@ mod tests {
                 fields: vec![],
                 langs: vec![ForeignLang {
                     lang: "rust".into(),
-                    name: "Opts".into(),
+                    name: Some("Opts".into()),
                     fields,
                 }],
             }],
@@ -237,7 +246,7 @@ mod tests {
                 name: "memo".into(),
                 langs: vec![ForeignLang {
                     lang: "go".into(),
-                    name: "*Memo[.reading]".into(),
+                    name: Some("*Memo[.reading]".into()),
                     fields: BTreeMap::new(),
                 }],
                 methods: vec![ExternDecl {
@@ -301,7 +310,7 @@ mod tests {
                 id: "foreign".into(),
                 value: serde_json::to_value(vec![ForeignLang {
                     lang: "go".into(),
-                    name: "*TimeoutError".into(),
+                    name: Some("*TimeoutError".into()),
                     fields,
                 }])
                 .unwrap(),

@@ -106,3 +106,8 @@ bench	rust	service.tono	pass
 22-go-generated-struct-literal	go	probes/22-go-generated-struct-literal.tono	pass
 22-rust-generated-struct-literal	rust	probes/22-rust-generated-struct-literal.tono	pass
 22-ts-generated-struct-literal	typescript	probes/22-ts-generated-struct-literal.tono	pass
+# 23: the library reads the generated struct by reflection, from the `env`
+# tag on each field, at run time (TuningFromEnv[T]). A tag is invisible to
+# the compiler, so this row is graded by its driver: it sets the variables,
+# one with {profile} substituted by WithParam, and reads the values back.
+23-go-struct-tags	go	probes/23-go-struct-tags.tono	pass

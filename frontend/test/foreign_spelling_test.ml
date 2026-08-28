@@ -192,7 +192,7 @@ let struct_literal_under_its_own_spelling () =
     "the form's own type has no &" true
     (List.exists
        (fun (b : Ir.foreign_lang) ->
-         b.Ir.fl_lang = "go" && b.Ir.fl_head = "Options")
+         b.Ir.fl_lang = "go" && b.Ir.fl_head = Some "Options")
        form.Ir.fgs_langs)
 
 let nested_call_and_bound_position () =

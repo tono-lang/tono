@@ -331,6 +331,7 @@ pub fn outcome_discriminator_fn_named(
 
 fn string_param(name: &str) -> Field {
     Field {
+        tag: None,
         name: Symbol::builtin(name.to_string()),
         ty: TypeExpr::Ref(Symbol::builtin("string")),
         nullable: false,
@@ -409,6 +410,7 @@ fn discriminator_fn_body(
         name: Symbol::builtin(fn_name.to_string()),
         params: vec![
             Field {
+                tag: None,
                 name: Symbol::builtin("status"),
                 ty: TypeExpr::Ref(Symbol::builtin("number")),
                 nullable: false,

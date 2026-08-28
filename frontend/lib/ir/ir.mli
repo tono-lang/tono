@@ -304,7 +304,7 @@ type extern_decl = {
 
 type foreign_lang = {
   fl_lang : string;
-  fl_head : string;
+  fl_head : string option;
   fl_fields : (string * string) list;
 }
 

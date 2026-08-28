@@ -6,6 +6,7 @@ pub mod compat_ext;
 mod compat_shape;
 pub mod config;
 pub mod ir;
+mod ir_extern_blocks;
 mod ir_extern_model;
 mod ir_tests_model;
 

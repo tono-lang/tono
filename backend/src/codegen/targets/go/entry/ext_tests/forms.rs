@@ -21,7 +21,7 @@ fn lib_with_options_form() -> ExtLib {
         }],
         langs: vec![ForeignLang {
             lang: "go".into(),
-            name: "Options".into(),
+            name: Some("Options".into()),
             fields,
         }],
     });
@@ -79,7 +79,7 @@ fn a_spelled_form_literal_crosses_as_the_spelling_asks() {
         render(&lib, &options_literal(Some("Options"))),
         "bus.Options{Digits: int(3)}"
     );
-    assert_eq!(lib.structs[0].lang("go").unwrap().name, "Options");
+    assert_eq!(lib.structs[0].lang("go").unwrap().head(), "Options");
 }
 
 /// A spelling Go cannot reach from the literal is refused naming both

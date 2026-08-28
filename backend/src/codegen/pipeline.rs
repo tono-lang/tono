@@ -297,6 +297,7 @@ pub fn generate(
     crate::codegen::entries::validate_entries(model, targets)?;
     crate::codegen::declared_tests::validate_declared_tests(model, targets)?;
     crate::codegen::ops::validate_error_codes(model)?;
+    crate::codegen::targets::go::struct_tags::validate_struct_tags(model, targets)?;
     let prepared = prepare(model, config);
     let mut files = Vec::new();
     for &target in targets {
@@ -327,6 +328,7 @@ fn generate_kept(
     crate::codegen::entries::validate_entries(model, &[target])?;
     crate::codegen::declared_tests::validate_declared_tests(model, &[target])?;
     crate::codegen::ops::validate_error_codes(model)?;
+    crate::codegen::targets::go::struct_tags::validate_struct_tags(model, &[target])?;
     let prepared = prepare(model, config);
     let files = emit_target(&prepared, target, casing, config, keep);
     reject_duplicate_paths(&files)?;

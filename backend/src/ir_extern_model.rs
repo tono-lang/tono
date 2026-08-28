@@ -14,7 +14,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::ir::{Select, Tref};
+use crate::ir::{ForeignStruct, OpaqueType, Select, Tref};
 
 fn ensure_only(obj: &serde_json::Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
     match obj.keys().find(|k| !allowed.contains(&k.as_str())) {
@@ -401,88 +401,6 @@ impl ExternDecl {
     }
 }
 
-/// One language's block on a struct. `name` is positional and names the
-/// foreign thing: a foreign form's type, an opaque handle's whole storage
-/// type, an error struct's sentinel or error type. `fields` pairs a tono
-/// field with its foreign spelling: the field's foreign type on a form,
-/// where the field comes from on an error value. An error struct carries
-/// its blocks as the `foreign` trait of its shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForeignLang {
-    pub lang: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub fields: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForeignField {
-    pub name: String,
-    pub r#type: Tref,
-}
-
-/// A foreign shape declared inside an `ext` block, mirroring the foreign
-/// side's field names/casing verbatim; never a top-level shape, never role-
-/// classified, never crosses the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForeignStruct {
-    pub name: String,
-    #[serde(default)]
-    pub fields: Vec<ForeignField>,
-    #[serde(default)]
-    pub langs: Vec<ForeignLang>,
-}
-
-impl ForeignStruct {
-    pub fn lang(&self, lang: &str) -> Option<&ForeignLang> {
-        self.langs.iter().find(|l| l.lang == lang)
-    }
-}
-
-/// An opaque foreign handle whose only members are ext op methods; never
-/// serializes, never crosses the wire. Each language block spells the whole
-/// storage type verbatim (`Calculator[float64]`, `Box<dyn Calculator<f64>>`);
-/// a language with no block does not hold the handle at all.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpaqueType {
-    pub name: String,
-    #[serde(default)]
-    pub langs: Vec<ForeignLang>,
-    #[serde(default)]
-    pub methods: Vec<ExternDecl>,
-}
-
-impl OpaqueType {
-    /// The storage type this handle declares for one language, when it
-    /// declares one.
-    pub fn storage(&self, lang: &str) -> Option<&str> {
-        self.langs
-            .iter()
-            .find(|l| l.lang == lang)
-            .map(|l| l.name.as_str())
-    }
-}
-
-impl ForeignLang {
-    /// The language blocks an error struct carries as the `foreign` trait of
-    /// its shape (see `ForeignLang`); empty when it declares none.
-    pub fn of_shape(shape: &crate::ir::Shape) -> Vec<ForeignLang> {
-        shape
-            .traits
-            .iter()
-            .find(|t| t.id == "foreign")
-            .and_then(|t| serde_json::from_value(t.value.clone()).ok())
-            .unwrap_or_default()
-    }
-
-    /// How `lang` recognizes the error shape `id` of `module`: its block,
-    /// when the shape declares one for that language.
-    pub fn of_error(module: &crate::ir::Module, id: &str, lang: &str) -> Option<ForeignLang> {
-        let shape = module.shapes.iter().find(|s| s.id == id)?;
-        Self::of_shape(shape).into_iter().find(|l| l.lang == lang)
-    }
-}
-
 /// One per-language module path declared by an `ext` block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LangPath {
@@ -507,6 +425,7 @@ pub struct ExtLib {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ForeignLang;
 
     fn roundtrip(arg: &CallArg) {
         let json = serde_json::to_string(arg).unwrap();
@@ -746,7 +665,7 @@ mod tests {
         fields.insert("message".to_string(), "Error()".to_string());
         let fl = ForeignLang {
             lang: "go".into(),
-            name: "ErrParse".into(),
+            name: Some("ErrParse".into()),
             fields,
         };
         let json = serde_json::to_value(&fl).unwrap();

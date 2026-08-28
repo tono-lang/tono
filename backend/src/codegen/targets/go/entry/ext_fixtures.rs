@@ -129,7 +129,7 @@ pub fn go_extern_ctx(
 pub fn foreign_lang(lang: &str, name: &str, fields: &[(&str, &str)]) -> ForeignLang {
     ForeignLang {
         lang: lang.into(),
-        name: name.into(),
+        name: Some(name.into()),
         fields: fields
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))

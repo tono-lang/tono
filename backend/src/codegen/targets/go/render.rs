@@ -151,6 +151,25 @@ fn is_wide_int(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Ref(sym) if sym.name == "int64" || sym.name == "uint64")
 }
 
+/// The value of a field's `encoding/json` struct tag, which carries all the
+/// wire work: the wire key, `,string` for a 64-bit integer (precise above
+/// 2^53), and `,omitempty` for an optional pointer so an absent value is
+/// dropped. The one derivation the renderer and the declared-tag gate share,
+/// so the gate names exactly the tag the field would carry.
+pub(crate) fn json_tag(field: &Field) -> String {
+    let collection = matches!(field.ty, TypeExpr::List(_) | TypeExpr::Map(_, _));
+    let pointer = field.nullable && !collection;
+    let wire = field.wire.as_deref().unwrap_or(&field.name.name);
+    let mut tag = wire.to_string();
+    if is_wide_int(&field.ty) {
+        tag.push_str(",string");
+    }
+    if pointer {
+        tag.push_str(",omitempty");
+    }
+    tag
+}
+
 impl GoRules {
     fn render_type(&self, ty: &TypeExpr) -> String {
         syntax::render_type(ty, self)
@@ -163,20 +182,21 @@ impl GoRules {
         // collection is already nullable, so it stays a slice/map.
         let pointer = field.nullable && !collection;
         let ty = if pointer { format!("*{base}") } else { base };
-        // The `encoding/json` struct tag carries all the wire work: the wire key,
-        // `,string` for a 64-bit integer (precise above 2^53), and `,omitempty` for
-        // an optional pointer so an absent value is dropped.
-        let wire = field.wire.as_deref().unwrap_or(&field.name.name);
-        let mut tag = wire.to_string();
-        if is_wide_int(&field.ty) {
-            tag.push_str(",string");
-        }
-        if pointer {
-            tag.push_str(",omitempty");
-        }
+        let tag = json_tag(field);
         let doc = doc_prefix(field.doc.as_deref(), "\t");
         let dep = deprecated_prefix(field.deprecated.as_deref(), "\t");
-        format!("{doc}{dep}\t{} {ty} `json:\"{tag}\"`\n", field.name.name)
+        // A tag the .tono declared for the field rides after the derived one,
+        // verbatim: the generator never merges or reorders what a library
+        // reads by reflection (`struct_tags` refuses a key it would derive).
+        let declared = field
+            .tag
+            .as_deref()
+            .map(|t| format!(" {t}"))
+            .unwrap_or_default();
+        format!(
+            "{doc}{dep}\t{} {ty} `json:\"{tag}\"{declared}`\n",
+            field.name.name
+        )
     }
 
     fn render_enum(&self, decl: &EnumDecl) -> String {

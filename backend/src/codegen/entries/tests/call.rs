@@ -325,11 +325,11 @@ fn ext_lib_with_handle(lib: &str, handle: &str) -> ExtLib {
                 .into_iter()
                 .map(|l| crate::ir::ForeignLang {
                     lang: l.into(),
-                    name: if l == "go" {
+                    name: Some(if l == "go" {
                         "*Handle".into()
                     } else {
                         "Handle".into()
-                    },
+                    }),
                     fields: Default::default(),
                 })
                 .collect(),
@@ -519,7 +519,7 @@ fn a_spelled_form_literal_must_coerce_for_each_target() {
             .into_iter()
             .map(|l| crate::ir::ForeignLang {
                 lang: l.into(),
-                name: "Options".into(),
+                name: Some("Options".into()),
                 fields: Default::default(),
             })
             .collect(),
@@ -587,7 +587,7 @@ fn a_foreign_form_must_declare_a_block_for_the_target_it_is_built_in() {
         }],
         langs: vec![crate::ir::ForeignLang {
             lang: "rust".into(),
-            name: "Opts".into(),
+            name: Some("Opts".into()),
             fields,
         }],
     }];

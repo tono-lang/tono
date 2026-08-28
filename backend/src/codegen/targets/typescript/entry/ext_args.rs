@@ -163,7 +163,7 @@ pub(super) fn render_arg(
             match spelling {
                 None => literal,
                 Some(spelling) => {
-                    let form_type = block.map(|b| b.name.as_str()).unwrap_or(name);
+                    let form_type = block.and_then(|b| b.name.as_deref()).unwrap_or(name);
                     ext_coerce::form_coerce(form_type, spelling, &literal).unwrap_or_else(|e| {
                         panic!("{e}; validate_calls::foreign_forms_declared should have refused it")
                     })

@@ -25,7 +25,8 @@ let encode_lang_path (lp : Ir.lang_path) : Ir.json =
 
 let encode_foreign_lang (l : Ir.foreign_lang) : Ir.json =
   `Assoc
-    ([ ("lang", `String l.fl_lang); ("name", `String l.fl_head) ]
+    ([ ("lang", `String l.fl_lang) ]
+    @ (match l.fl_head with None -> [] | Some h -> [ ("name", `String h) ])
     @
     if l.fl_fields = [] then []
     else
@@ -149,7 +150,13 @@ let decode_lang_path j =
 let decode_foreign_lang j =
   let* kvs = as_assoc j in
   let* lang = field kvs "lang" "foreign lang" as_string in
-  let* head = field kvs "name" "foreign lang" as_string in
+  let* head =
+    match List.assoc_opt "name" kvs with
+    | None -> Ok None
+    | Some v ->
+        let* h = as_string v in
+        Ok (Some h)
+  in
   let* fields =
     match List.assoc_opt "fields" kvs with
     | None -> Ok []

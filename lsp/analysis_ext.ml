@@ -264,7 +264,10 @@ let symbols ~(range : Span.span -> Range.t) (b : Ast.ext_lib_body) :
           Printf.sprintf "%s (%s)" t.Ast.opq_name
             (String.concat ", "
                (List.map
-                  (fun (b : Ast.lang_block) -> b.Ast.lb_lang ^ ": " ^ b.lb_head)
+                  (fun (b : Ast.lang_block) ->
+                    match b.Ast.lb_head with
+                    | Some h -> b.Ast.lb_lang ^ ": " ^ h
+                    | None -> b.Ast.lb_lang)
                   langs))
     in
     ( t.Ast.opq_span.Span.start.offset,

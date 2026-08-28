@@ -227,6 +227,12 @@ pub struct Field {
     /// The `@doc` Markdown for this field, or `None`. Rendered as the target's
     /// native member documentation. `None` for a method/function parameter.
     pub doc: Option<String>,
+    /// A per-field declaration the `.tono` spells for this target, verbatim,
+    /// that the renderer appends after what it derives itself: a Go struct
+    /// tag (`env:"HOST"`) placed after the `json` tag, for a library that
+    /// reads the generated type by reflection. `None` on every other target
+    /// and on a method/function parameter.
+    pub tag: Option<String>,
 }
 
 /// An operation stub: a typed signature. The opaque wire descriptor and the
@@ -438,6 +444,7 @@ mod tests {
                     params: vec![],
                     fields: vec![
                         Field {
+                            tag: None,
                             name: Symbol::builtin("id"),
                             ty: TypeExpr::Ref(Symbol::builtin("string")),
                             nullable: false,
@@ -446,6 +453,7 @@ mod tests {
                             doc: None,
                         },
                         Field {
+                            tag: None,
                             name: Symbol::builtin("page"),
                             ty: page_of_charge(),
                             nullable: true,
@@ -481,6 +489,7 @@ mod tests {
                 Decl::Method(Method {
                     name: Symbol::builtin("create_charge"),
                     params: vec![Field {
+                        tag: None,
                         name: Symbol::builtin("input"),
                         ty: TypeExpr::Ref(Symbol::imported("Charge", "payments", "Charge")),
                         nullable: false,

@@ -390,7 +390,7 @@ fn a_call_field_with_every_call_arg_variant_and_a_nested_call_emits_without_pani
         }],
         langs: vec![crate::ir::ForeignLang {
             lang: "rust".into(),
-            name: "Opts".into(),
+            name: Some("Opts".into()),
             fields: Default::default(),
         }],
     }];
@@ -516,7 +516,7 @@ fn ctor_expr_builds_a_form_from_its_rust_block() {
         }],
         langs: vec![crate::ir::ForeignLang {
             lang: "rust".into(),
-            name: "Opts".into(),
+            name: Some("Opts".into()),
             fields: spelled,
         }],
     }];
@@ -550,7 +550,7 @@ fn a_spelled_form_literal_is_lent_or_wrapped() {
         fields: vec![],
         langs: vec![crate::ir::ForeignLang {
             lang: "rust".into(),
-            name: "Opts".into(),
+            name: Some("Opts".into()),
             fields: Default::default(),
         }],
     }];

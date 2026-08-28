@@ -321,6 +321,7 @@ pub fn validator_function(name: String, ty: String, ret: TypeExpr, body: String)
     Decl::Function(Function {
         name: Symbol::builtin(name),
         params: vec![Field {
+            tag: None,
             name: Symbol::builtin("value"),
             ty: TypeExpr::Ref(Symbol::builtin(ty)),
             nullable: false,

@@ -12,6 +12,7 @@ use serde_json::Value;
 // The declared-test types and the FFI ext/extern library types live in their
 // own files to stay within the file-size gate; re-exporting them here keeps
 // the IR mirror a single public surface.
+pub use crate::ir_extern_blocks::*;
 pub use crate::ir_extern_model::*;
 pub use crate::ir_tests_model::*;
 
@@ -113,7 +114,7 @@ pub use crate::ir_tests_model::*;
 /// v32 widened what `TypeRef` may name: a module's own wire struct as well
 /// as an opaque handle of the block. Same wire shape; a reader that only
 /// resolves handles would miss the struct, so the gate moves.
-pub const TONO_IR_VERSION: u32 = 32;
+pub const TONO_IR_VERSION: u32 = 33;
 
 /// Closed primitive set. Serializes as a bare string ("i32", "string", ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

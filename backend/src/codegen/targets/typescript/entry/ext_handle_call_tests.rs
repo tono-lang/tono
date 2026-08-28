@@ -177,7 +177,7 @@ fn bus_lib() -> ExtLib {
             name: "publisher".into(),
             langs: vec![crate::ir::ForeignLang {
                 lang: "ts".into(),
-                name: "Publisher".into(),
+                name: Some("Publisher".into()),
                 fields: Default::default(),
             }],
             methods: vec![send, ping, status, tag, echo],

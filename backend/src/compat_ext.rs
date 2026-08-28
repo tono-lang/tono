@@ -58,7 +58,7 @@ pub fn diff_ext_libs(baseline: &Model, current: &Model, out: &mut Vec<Change>) {
 /// it, so generated consumer code that names the concrete type no longer
 /// compiles.
 fn diff_instances(module: &str, lib: &ExtLib, curr_lib: &ExtLib, out: &mut Vec<Change>) {
-    let curr_types: BTreeMap<&str, &crate::ir_extern_model::OpaqueType> = curr_lib
+    let curr_types: BTreeMap<&str, &crate::ir::OpaqueType> = curr_lib
         .types
         .iter()
         .map(|t| (t.name.as_str(), t))
@@ -339,7 +339,7 @@ mod tests {
     fn storage(lang: &str, name: &str) -> crate::ir::ForeignLang {
         crate::ir::ForeignLang {
             lang: lang.into(),
-            name: name.into(),
+            name: Some(name.into()),
             fields: Default::default(),
         }
     }
@@ -355,7 +355,7 @@ mod tests {
         }];
         let base = model(m.clone());
         let mut changed = m;
-        changed.ext_libs[0].types[0].langs[0].name = "*Source[OtherSettings]".into();
+        changed.ext_libs[0].types[0].langs[0].name = Some("*Source[OtherSettings]".into());
         let curr = model(changed);
 
         let mut out = Vec::new();
@@ -376,7 +376,7 @@ mod tests {
         }];
         let base = model(m.clone());
         let mut changed = m;
-        changed.ext_libs[0].types[0].langs[0].name = "Meter".into();
+        changed.ext_libs[0].types[0].langs[0].name = Some("Meter".into());
         let curr = model(changed);
 
         let mut out = Vec::new();

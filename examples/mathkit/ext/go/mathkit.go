@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -269,4 +271,129 @@ func (c *Client) Read(ctx context.Context, key string) *Reading {
 	default:
 		return &Reading{err: fmt.Errorf("%w: %q", ErrMissing, key)}
 	}
+}
+
+// Tuning is a calculator's calibration resolved for the caller's own struct
+// T: the library reads T by reflection, from the `env:"..."` tag on each of
+// its fields, the shape of a configuration library. The interface is held
+// by value, never as a pointer, and the constructors are generic over a
+// type the library never sees.
+type Tuning[T any] interface {
+	Load(ctx context.Context) (T, error)
+}
+
+// EnvOpt configures TuningFromEnv: functional and variadic, the same shape
+// Option has on FromFormula.
+type EnvOpt func(*envParams)
+
+type envParams struct{ params map[string]string }
+
+// WithParam substitutes {name} inside every variable name a tag declares,
+// at run time: with `env:"CALC_{profile}_SCALE"` on the field,
+// WithParam("profile", "alpha") reads CALC_alpha_SCALE.
+func WithParam(name, value string) EnvOpt {
+	return func(p *envParams) { p.params[name] = value }
+}
+
+// ErrUnset is the error Load carries for a variable the environment lacks.
+var ErrUnset = errors.New("mathkit: variable not set")
+
+type envTuning[T any] struct{ params map[string]string }
+
+// TuningFromEnv resolves T from the environment. Every field of T must
+// carry an `env` tag naming its variable, with {service} and every
+// WithParam name substituted; T itself must be a struct. A field with no
+// tag is the defect this contract exists for: the library cannot know
+// where the value comes from, and Load fails at run time, exactly as a
+// generated type without tags fails against a reflection-driven library
+// after compiling cleanly.
+func TuningFromEnv[T any](service string, opts ...EnvOpt) (Tuning[T], error) {
+	var zero T
+	if reflect.TypeOf(zero) == nil || reflect.TypeOf(zero).Kind() != reflect.Struct {
+		return nil, fmt.Errorf("mathkit: a tuning resolves a struct, not %T", zero)
+	}
+	p := envParams{params: map[string]string{"service": service}}
+	for _, o := range opts {
+		o(&p)
+	}
+	return &envTuning[T]{params: p.params}, nil
+}
+
+// Load reads every field of T from its variable, substituting the
+// parameters in the name first.
+func (e *envTuning[T]) Load(ctx context.Context) (T, error) {
+	var out T
+	v := reflect.ValueOf(&out).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name, ok := f.Tag.Lookup("env")
+		if !ok {
+			return out, fmt.Errorf("mathkit: field %s of %s carries no env tag", f.Name, t.Name())
+		}
+		for k, val := range e.params {
+			name = strings.ReplaceAll(name, "{"+k+"}", val)
+		}
+		raw, found := os.LookupEnv(name)
+		if !found {
+			return out, fmt.Errorf("%w: %s", ErrUnset, name)
+		}
+		switch f.Type.Kind() {
+		case reflect.String:
+			v.Field(i).SetString(raw)
+		case reflect.Float64:
+			x, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return out, err
+			}
+			v.Field(i).SetFloat(x)
+		case reflect.Int, reflect.Int64:
+			x, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				return out, err
+			}
+			v.Field(i).SetInt(x)
+		case reflect.Bool:
+			x, err := strconv.ParseBool(raw)
+			if err != nil {
+				return out, err
+			}
+			v.Field(i).SetBool(x)
+		default:
+			return out, fmt.Errorf("mathkit: cannot read a %s from the environment", f.Type)
+		}
+	}
+	return out, nil
+}
+
+type pinnedTuning[T any] struct{ value T }
+
+func (p *pinnedTuning[T]) Load(ctx context.Context) (T, error) { return p.value, nil }
+
+// TuningPinned answers the value it was given: the defaults a calibration
+// falls back to when the environment does not carry it.
+func TuningPinned[T any](value T) (Tuning[T], error) {
+	return &pinnedTuning[T]{value: value}, nil
+}
+
+type tuningFallback[T any] struct{ tunings []Tuning[T] }
+
+// Load asks each composed tuning in turn and answers the first that loads.
+func (f *tuningFallback[T]) Load(ctx context.Context) (T, error) {
+	var zero T
+	var lastErr error = errors.New("mathkit: no tunings to fall back to")
+	for _, t := range f.tunings {
+		v, err := t.Load(ctx)
+		if err == nil {
+			return v, nil
+		}
+		lastErr = err
+	}
+	return zero, lastErr
+}
+
+// TuningFallback composes tunings the caller already built, variadically,
+// the same shape FromFallback has for calculators.
+func TuningFallback[T any](tunings ...Tuning[T]) (Tuning[T], error) {
+	return &tuningFallback[T]{tunings: tunings}, nil
 }

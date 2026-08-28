@@ -249,10 +249,10 @@ let match_null_arm_not_optional = register "TC0090"
    is by definition absent, so there is nothing for "._" to name). *)
 let match_subject_ref_invalid = register "TC0091"
 
-(* A language block on a top-level struct that is not an error struct: the
-   block says how a target recognizes a foreign error and where each field
-   comes from, which only an error (a struct with @status or @errorCode)
-   has a use for. *)
+(* A language block on a top-level struct that is an entry or a config: a
+   block says how a target recognizes a foreign error (an error struct) or
+   declares a target's field tags (a wire struct), and neither has a use on
+   a struct that is constructed rather than read. *)
 let struct_lang_block_misplaced = register "TC0092"
 
 (* @async on an ext op naming a target that has no asynchronous call (Go
@@ -294,3 +294,10 @@ let extern_name_ambiguous = register "TC0098"
    to build it from, so the binding declares the call's positions with
    yields: alone (and the target compiler grades the value). *)
 let extern_returns_handle = register "TC0099"
+
+(* A language block whose shape does not fit its struct: a head where none
+   belongs (a wire struct's block declares field tags only), no head where
+   one is required (a foreign form, an opaque handle, an error struct each
+   name something foreign first), or a wire struct's block with no entry
+   at all. *)
+let lang_block_shape = register "TC0100"

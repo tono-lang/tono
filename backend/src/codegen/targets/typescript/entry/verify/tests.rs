@@ -430,7 +430,7 @@ fn run_grades_a_binding_against_the_generated_types() {
         .iter_mut()
         .find(|l| l.lang == "ts")
         .unwrap();
-    dial.name = "Dial<.summary>".into();
+    dial.name = Some("Dial<.summary>".into());
     let open = m.ext_libs[0]
         .externs
         .iter_mut()
@@ -516,7 +516,7 @@ fn a_generated_type_reference_is_probed_against_the_types_or_listed_with_why() {
         .iter_mut()
         .find(|l| l.lang == "ts")
         .unwrap();
-    dial.name = "Dial<.summary>".into();
+    dial.name = Some("Dial<.summary>".into());
     let open = m.ext_libs[0]
         .externs
         .iter_mut()

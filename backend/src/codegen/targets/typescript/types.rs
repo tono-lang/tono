@@ -111,6 +111,7 @@ fn variant_of(member: &Member) -> Variant {
 
 fn field_of(member: &Member, config: &CasingConfig) -> Field {
     Field {
+        tag: None,
         name: Symbol::builtin(field_ident(member, config, LANG)),
         ty: conventions::entries_or_map(type_expr_of(&member.target), &member.traits),
         nullable: !member.required,

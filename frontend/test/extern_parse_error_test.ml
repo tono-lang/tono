@@ -365,7 +365,14 @@ let opaque_type_body_junk () =
 
 (* ── language blocks ───────────────────────────────────────────────────── *)
 
+(* A block without a head parses (a wire struct's block has none; the
+   checker rules on where one is required), except the ext header's own,
+   which is nothing but the module path. *)
 let lang_block_missing_head () =
+  let ds = file_diags {|ext mylib { go { } }|} in
+  Alcotest.(check bool)
+    "names the module path" true
+    (has_message ~sub:"module path" ds);
   let ds =
     file_diags
       {|ext mylib {
@@ -374,7 +381,7 @@ let lang_block_missing_head () =
        }|}
   in
   Alcotest.(check bool)
-    "names the missing spelling" true
+    "a headless block on a struct is the checker's call" false
     (has_message ~sub:"first element of a language block" ds)
 
 let lang_block_keyed_entry_missing_spelling () =

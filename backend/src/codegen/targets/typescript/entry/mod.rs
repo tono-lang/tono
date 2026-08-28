@@ -545,7 +545,7 @@ pub fn form_spelling_coerces(
         .langs
         .iter()
         .find(|l| l.lang == "ts" || l.lang == "typescript")
-        .map(|b| b.name.as_str())
+        .and_then(|b| b.name.as_deref())
         .unwrap_or(&form.name);
     ext_coerce::form_coerce(form_type, spelling, "v").map(|_| ())
 }

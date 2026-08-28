@@ -74,7 +74,7 @@ pub(in super::super) fn form_coerce(
     literal: &str,
 ) -> Result<String, String> {
     let alias = lib_ident(&lib.name);
-    let form_type = qualify(&block.name, &alias, module);
+    let form_type = qualify(block.head(), &alias, module);
     if qualify(spelling, &alias, module) == form_type {
         return Ok(literal.to_string());
     }
@@ -289,7 +289,7 @@ fn ctor_expr(
         .collect();
     let literal = format!(
         "{}{{{}}}",
-        qualify(&block.name, &alias, module),
+        qualify(block.head(), &alias, module),
         fields.join(", ")
     );
     match &ctor.spelling {
@@ -500,8 +500,8 @@ pub(in super::super) fn error_block(
         if let Some(alias) = import_lib(refs, lib) {
             refs.push(import("errors", "errors"));
             for (i, (id, fl)) in bindings.iter().enumerate() {
-                let sentinel = qualify(&fl.name, &alias, module);
-                if fl.name.starts_with('*') {
+                let sentinel = qualify(fl.head(), &alias, module);
+                if fl.head().starts_with('*') {
                     // A pointer type: matched by type, the matched value
                     // being where the fields come from.
                     let target = format!("{err_var}As{i}");

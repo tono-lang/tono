@@ -469,6 +469,7 @@ fn function_owned(name: &str, params: &[(&str, &str)], ret: &str, body: String) 
         params: params
             .iter()
             .map(|&(n, t)| Field {
+                tag: None,
                 name: Symbol::builtin(n),
                 ty: TypeExpr::Ref(Symbol::builtin(t)),
                 nullable: false,

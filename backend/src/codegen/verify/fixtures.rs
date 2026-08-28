@@ -41,7 +41,7 @@ fn lang(lang: &str, symbol: &str, call_args: Vec<CallArg>) -> ExternLang {
 fn block(lang: &str, name: &str, fields: &[(&str, &str)]) -> ForeignLang {
     ForeignLang {
         lang: lang.into(),
-        name: name.into(),
+        name: Some(name.into()),
         fields: fields
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))

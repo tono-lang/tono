@@ -84,7 +84,7 @@ pub(super) fn form_coerce(
     literal: &str,
 ) -> Result<String, String> {
     let krate = crate_of(lib);
-    let form_type = ext::qualify(&block.name, &krate, module);
+    let form_type = ext::qualify(block.head(), &krate, module);
     coerce_from(module, &krate, &form_type, spelling, literal)
 }
 
@@ -180,7 +180,7 @@ pub(super) fn ctor_expr(
         .collect();
     let literal = format!(
         "{} {{ {} }}",
-        ext::qualify(&block.name, krate, module),
+        ext::qualify(block.head(), krate, module),
         rendered.join(", ")
     );
     match &ctor.spelling {
@@ -473,7 +473,7 @@ pub(super) fn error_match(
     }
     let mut arms = String::new();
     for fl in &bindings {
-        let pattern = ext::qualify(&fl.name, &krate, module);
+        let pattern = ext::qualify(fl.head(), &krate, module);
         let message = fl
             .fields
             .get("message")

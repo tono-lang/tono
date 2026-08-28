@@ -93,7 +93,7 @@ fn appendix_model() -> Model {
                 fields: vec![string_field("region"), string_field("service")],
                 langs: vec![tono_backend::ir::ForeignLang {
                     lang: "ts".into(),
-                    name: "LoadOptions".into(),
+                    name: Some("LoadOptions".into()),
                     fields: Default::default(),
                 }],
             },
@@ -102,7 +102,7 @@ fn appendix_model() -> Model {
                 fields: vec![string_field("host"), string_field("token")],
                 langs: vec![tono_backend::ir::ForeignLang {
                     lang: "ts".into(),
-                    name: "Config".into(),
+                    name: Some("Config".into()),
                     fields: Default::default(),
                 }],
             },
@@ -121,7 +121,7 @@ fn appendix_model() -> Model {
             name: "publisher".into(),
             langs: vec![tono_backend::ir::ForeignLang {
                 lang: "ts".into(),
-                name: "Publisher".into(),
+                name: Some("Publisher".into()),
                 fields: Default::default(),
             }],
             methods: vec![],
@@ -285,7 +285,7 @@ fn handle_call_model() -> Model {
             name: "publisher".into(),
             langs: vec![tono_backend::ir::ForeignLang {
                 lang: "ts".into(),
-                name: "Publisher".into(),
+                name: Some("Publisher".into()),
                 fields: Default::default(),
             }],
             methods: vec![send],

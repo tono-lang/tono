@@ -111,7 +111,7 @@ fn context_is_imported_only_when_a_binding_declares_it() {
 #[test]
 fn a_probe_with_every_line_skipped_still_resolves_the_library() {
     let mut m = gearbox_module();
-    m.ext_libs[0].types[0].langs[0].name = "Dial[.summary]".into();
+    m.ext_libs[0].types[0].langs[0].name = Some("Dial[.summary]".into());
     m.ext_libs[0].structs.clear();
     m.ext_libs[0].externs.retain(|d| d.name == "open");
     let open = &mut m.ext_libs[0].externs[0];
@@ -385,7 +385,7 @@ fn run_grades_a_binding_against_the_generated_types() {
         "tono-go-generated",
         "package gearbox\n\nimport \"context\"\n\ntype Dial[T any] interface{ Read(ctx context.Context) (float64, error) }\n\nfunc Open[T any](v T) (Dial[T], error) { return nil, nil }\n",
     );
-    m.ext_libs[0].types[0].langs[0].name = "Dial[.summary]".into();
+    m.ext_libs[0].types[0].langs[0].name = Some("Dial[.summary]".into());
     let open = m.ext_libs[0]
         .externs
         .iter_mut()
@@ -453,7 +453,7 @@ fn run_grades_a_binding_against_the_generated_types() {
 #[test]
 fn a_generated_type_reference_is_probed_against_the_types_or_listed_with_why() {
     let mut m = gearbox_module();
-    m.ext_libs[0].types[0].langs[0].name = "Dial[.summary]".into();
+    m.ext_libs[0].types[0].langs[0].name = Some("Dial[.summary]".into());
     let open = m.ext_libs[0]
         .externs
         .iter_mut()

@@ -62,17 +62,25 @@ let expect_foreign st (what : string) : string * Span.span =
       P.error st t.span ("expected a foreign spelling '#(...)' " ^ what);
       ("", t.span)
 
-(* lang_block ::= lang "{" "#(...)" (name ":" "#(...)")* "}" -- the cursor
+(* lang_block ::= lang "{" "#(...)"? (name ":" "#(...)")* "}" -- the cursor
    sits on the language identifier. The first element is positional and
    names the foreign thing; the keyed entries name a tono field and give
    its foreign spelling. Shared by the ext header (where only the head is
-   meaningful: the module path), a struct inside the block, and an error
-   struct at top level. *)
+   meaningful: the module path), a struct inside the block, an error struct
+   at top level, and a wire struct at top level (keyed entries only: the
+   target's per-field declaration). Whether a head belongs is the
+   checker's rule per struct; the grammar takes both. *)
 let parse_lang_block st : Ast.lang_block =
   let lang, lang_span = expect_ident st "a language identifier" in
-  ignore (P.expect st Token.LBrace "'{' to open the language block");
+  let open_brace = P.expect st Token.LBrace "'{' to open the language block" in
   let head, head_span =
-    expect_foreign st "as the first element of a language block"
+    match (P.peek st).kind with
+    | Token.Foreign _ ->
+        let s, sp =
+          expect_foreign st "as the first element of a language block"
+        in
+        (Some s, sp)
+    | _ -> (None, match open_brace with Some t -> t.span | None -> lang_span)
   in
   let rec fields acc =
     match (P.peek st).kind with
@@ -104,8 +112,8 @@ let parse_lang_block st : Ast.lang_block =
         (match close with Some t -> t.span | None -> head_span);
   }
 
-(* An error struct's language block, at top level: "lang {" is the one item
-   of a struct body a bare identifier opens with a brace (a member is always
+(* A top-level struct's language block: "lang {" is the one item of a
+   struct body a bare identifier opens with a brace (a member is always
    "name: type"), and it takes no traits of its own. *)
 let parse_struct_lang_block st ~(traits : Ast.trait list) : Ast.lang_block =
   List.iter
@@ -124,10 +132,19 @@ let parse_lang_path st : Ast.lang_path =
       P.error st span
         "the ext header's language block names only the module path; a field \
          spelling belongs to a struct's own block");
+  let path =
+    match b.Ast.lb_head with
+    | Some p -> p
+    | None ->
+        P.error st b.Ast.lb_head_span
+          "the ext header's language block names the module path: '#(...)' as \
+           its first element";
+        ""
+  in
   {
     Ast.lp_lang = b.Ast.lb_lang;
     lp_lang_span = b.Ast.lb_lang_span;
-    lp_path = b.Ast.lb_head;
+    lp_path = path;
     lp_path_span = b.Ast.lb_head_span;
   }
 

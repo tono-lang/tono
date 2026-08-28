@@ -18,7 +18,8 @@ use crate::codegen::targets::go::codecs::union_type_decls;
 use crate::codegen::targets::go::symbols::symbol_of;
 use crate::codegen::tree::{Decl, Field, TypeExpr};
 use crate::codegen::validation::{self, Measure, ValSyntax};
-use crate::ir::{Member, Shape, Tref};
+use crate::ir::{ForeignLang, Member, Shape, Tref};
+use std::collections::BTreeMap;
 
 /// The Go language key for per-language traits such as `@rename`.
 pub(crate) const LANG: &str = "go";
@@ -42,10 +43,14 @@ pub fn type_expr_of(t: &Tref) -> TypeExpr {
 /// `is<Union>()` marker). The union's serialization — the wrapper `MarshalJSON`s and
 /// the `unmarshalX` dispatcher — is emitted by the serde phase, not here.
 pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
+    // The struct tags the shape's headless `go` block declares per field,
+    // if any: a library reading the generated type by reflection needs them
+    // on the field itself, so they ride the tree, never a side channel.
+    let tags = ForeignLang::struct_tags(shape, LANG);
     conventions::emit_shape(
         shape,
         LANG,
-        |m| field_of(m, config),
+        |m| field_of(m, config, &tags),
         // A Go enum is a named string or int built from its wire values; the const
         // identifiers are derived at render time.
         |backing, values, name, dep, doc| {
@@ -57,7 +62,11 @@ pub fn emit_type(shape: &Shape, config: &CasingConfig) -> Vec<Decl> {
     )
 }
 
-fn field_of(member: &Member, config: &CasingConfig) -> Field {
+pub(crate) fn field_of(
+    member: &Member,
+    config: &CasingConfig,
+    tags: &BTreeMap<String, String>,
+) -> Field {
     Field {
         name: Symbol::builtin(field_ident(member, config, LANG)),
         ty: conventions::entries_or_map(type_expr_of(&member.target), &member.traits),
@@ -67,6 +76,8 @@ fn field_of(member: &Member, config: &CasingConfig) -> Field {
         wire: Some(wire_key(member)),
         deprecated: conventions::deprecated_of(&member.traits),
         doc: conventions::doc_of(&member.traits),
+        // The declared tag follows the derived one, verbatim.
+        tag: tags.get(&member.name).cloned(),
     }
 }
 
@@ -204,6 +215,45 @@ mod tests {
                 && i.fields[1].name.name == "Note"
                 && i.fields[1].wire.as_deref() == Some("note")
                 && i.fields[1].nullable));
+    }
+
+    /// A wire struct's headless `go` block puts each declared tag on its
+    /// field, verbatim; a field without an entry carries none. An error
+    /// struct's headed block is a recognition, not tags: its keyed entries
+    /// stay off the fields.
+    #[test]
+    fn a_declared_go_tag_rides_on_its_field_only() {
+        let block = |name: Option<&str>| crate::ir::Trait {
+            id: "foreign".into(),
+            value: serde_json::to_value(vec![ForeignLang {
+                lang: "go".into(),
+                name: name.map(str::to_string),
+                fields: [(
+                    "scale".to_string(),
+                    "env:\"CALC_{profile}_SCALE\"".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            }])
+            .unwrap(),
+        };
+        let mut shape = structure(
+            "tuning#calibration",
+            vec![
+                member("scale", Tref::Prim(Prim::Float), true),
+                member("offset", Tref::Prim(Prim::Float), true),
+            ],
+        );
+        shape.traits = vec![block(None)];
+        let decls = emit_type(&shape, &go_casing());
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.fields[0].tag.as_deref() == Some("env:\"CALC_{profile}_SCALE\"")
+                && i.fields[1].tag.is_none()));
+        // A headed block (an error struct's recognition) declares no tag.
+        shape.traits = vec![block(Some("ErrScale"))];
+        let decls = emit_type(&shape, &go_casing());
+        assert!(matches!(&decls[..], [Decl::Interface(i)]
+            if i.fields[0].tag.is_none() && i.fields[1].tag.is_none()));
     }
 
     #[test]
