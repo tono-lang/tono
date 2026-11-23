@@ -3,11 +3,7 @@
 [advisories]
 yanked = "deny"
 # Security advisories from the RustSec database fail the build by default.
-ignore = [
-  # `paste` is archived upstream; it reaches us only through ratatui's macros
-  # (build-time proc-macro, no runtime exposure). Drop when ratatui sheds it.
-  "RUSTSEC-2024-0436",
-]
+ignore = []
 
 [bans]
 multiple-versions = "warn"
